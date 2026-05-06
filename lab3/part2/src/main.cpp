@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
 #define MAX_TASKS 5
 
@@ -14,6 +16,18 @@
 #define PRIORITY_UPDATE_INTERVAL 30000
 
 #define MUSIC_BASE_FREQUENCY 440 // A4 note frequency in Hz
+
+// LCD Stuff
+#define LCD_ADDRESS 0x27
+#define CHANNEL 0
+#define FREQ 1000
+#define RES 12
+
+// Pins
+#define LED_PIN 1
+#define BUZZER_PIN 2
+
+LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
 
 typedef struct TCB {
   void (*function)(); // pointer to the task function
@@ -40,22 +54,72 @@ void writeRow(int row, String line) {
 }
 
 void taskA() {
-  // Task A code here
+    static bool currentState = 0;
+
+    currentState = !currentState;
+    digitalWrite(LED_PIN, currentState);
+    sleep_me(LED_BLINK_INTERVAL);
 }
 
 void taskB() {
-  // Task B code here
-  static unsigned int timesRun = 0; // increment at the end of the function
+  static unsigned int timesRun = 0;
+  static unsigned int loopsRun = 0;
+
+  if (timesRun < 10) {
+    writeRow(0, String(timesRun + 1)); // to be made
+    timesRun++;
+  }  else if (timesRun == 10) {
+    loopsRun++;
+    timesRun = 0;
+  }
+  
+  if (loopsRun == 2) {
+    halt_me();
+  } else {
+    sleep_me(LCD_UPDATE_INTERVAL);
+  }
 }
 
 void taskC() {
-  // Task C code here
-  static unsigned int timesRun = 0; // increment at the end of the function
+  static unsigned int timesRun = 0;
+  static unsigned int loopsRun = 0;
+
+  unsigned int note = 0;
+
+  if (timesRun < 10) {
+    note = MUSIC_BASE_FREQUENCY + (20 * (timesRun + 1));
+    writeRow(1, String(note));
+    ledcWrite(0, note);
+    timesRun++;
+  }  else if (timesRun == 10) {
+    loopsRun++;
+    timesRun = 0;
+  }
+  
+  if (loopsRun == 2) {
+    halt_me();
+  } else {
+    sleep_me(LCD_UPDATE_INTERVAL);
+  }
 }
 
 void taskD() {
-  // Task D code here
-  static unsigned int timesRun = 0; // increment at the end of the function
+  static unsigned int currentChar = 65; // increment at the end of the function
+  static unsigned int loopsRun = 0;
+
+  if (currentChar < 91) {
+    Serial.println(char(currentChar));
+    currentChar++;
+  }  else if (currentChar == 90) {
+    loopsRun++;
+    currentChar = 65;
+  }
+  
+  if (loopsRun == 2) {
+    halt_me();
+  } else {
+    sleep_me(ALPHABET_PRINT_INTERVAL);
+  }
 }
 
 void taskE() {
@@ -79,7 +143,13 @@ void halt_me() {
 }
 
 void setup() {
+  Serial.begin(9600);
+
   lcd.begin();
+
+  ledcSetup(CHANNEL, FREQ, RES);
+  ledcAttachPin(BUZZER_PIN, CHANNEL);
+
   taskList[0] = {taskA, READY, 0, 2, LED_BLINK_INTERVAL};           // TASK A: Blinking LED 
   taskList[1] = {taskB, READY, 0, 3, LCD_UPDATE_INTERVAL};          // TASK B: LCD Counter
   taskList[2] = {taskC, READY, 0, 4, MUSIC_PLAY_INTERVAL};          // TASK C: Music Player
