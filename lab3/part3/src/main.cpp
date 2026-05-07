@@ -10,6 +10,9 @@
 #define SERVICE_UUID        ""
 #define CHARACTERISTIC_UUID ""
 
+// Pins
+#define BUTTON_PIN 1 //make sure to input pullup
+
 
 class MyCallbacks: public BLECharacteristicCallbacks {
    void onWrite(BLECharacteristic *pCharacteristic) {
