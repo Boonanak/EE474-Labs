@@ -4,14 +4,16 @@
 
 #define MAX_TASKS 5
 
+// Task states
 #define RUNNING 0
 #define READY 1
 #define SLEEPING 2
 #define HALTED 3
 
+// Periods for each task
 #define LED_BLINK_INTERVAL 125
 #define LCD_UPDATE_INTERVAL 2000
-#define MUSIC_PLAY_INTERVAL 200 // delay between notes
+#define MUSIC_PLAY_INTERVAL 600 // delay between notes
 #define ALPHABET_PRINT_INTERVAL 500
 #define PRIORITY_UPDATE_INTERVAL 30000
 
@@ -32,23 +34,45 @@ LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
 void sleep_me(unsigned int ms);
 void halt_me();
 
+// 12-bit PWM resolution: 0–4095
+// Channel frequency: 1000 Hz
+// 10-note sequence for buzzer output
+
+int buzzer_notes[10] = {
+    512,   // C
+    1024,  // D
+    1536,  // E
+    2048,  // F
+    2560,  // G
+    3072,  // A
+    3584,  // B
+    4095,  // High C
+    2048,  // F
+    1024   // D
+};
+
+// Task information
 typedef struct TCB {
   void (*function)(); // pointer to the task function
   unsigned short int state; // current state of the task
   unsigned int lastRunTime; // last time the task was run
   unsigned short int priority; // task run priority (lower number = higher priority)
-  unsigned int period; // period of the task in ms
+  unsigned int period; // How often the task should be run
+  bool reset; // if the task is supposed to reset itself
 } TCB;
 
+// Each task priority scheme
 int schemeTable[3][4] = {
                   {2, 3, 4, 5},
                   {5, 4, 2, 3},
                   {2, 2, 2, 2}
                   };
 
+// List of tasks and the current task
 TCB taskList[MAX_TASKS];
 TCB *currentTask;
 
+// Write a line of text to one of the LCD rows
 void writeRow(int row, String line) {
   lcd.setCursor(0,row);
   lcd.print("                ");
@@ -56,22 +80,30 @@ void writeRow(int row, String line) {
   lcd.print(line);
 }
 
+// Blink an LED at a specific frequency
 void taskA() {
     static bool currentState = 0;
+    if (currentTask->reset) currentState = 0;
 
     currentState = !currentState;
     digitalWrite(LED_PIN, currentState);
     sleep_me(LED_BLINK_INTERVAL);
 }
 
+// Increment a number on the LCD screen
 void taskB() {
   static unsigned int timesRun = 0;
   static unsigned int loopsRun = 0;
-
+  if (currentTask->reset) {
+    timesRun = 0;
+    loopsRun = 0;
+  }
+  
   if (timesRun < 10) {
     writeRow(0, String(timesRun + 1)); // to be made
     timesRun++;
-  }  else if (timesRun == 10) {
+  }
+  if (timesRun == 10) {
     loopsRun++;
     timesRun = 0;
   }
@@ -83,33 +115,44 @@ void taskB() {
   }
 }
 
+// Play a note to the buzzer
 void taskC() {
   static unsigned int timesRun = 0;
   static unsigned int loopsRun = 0;
-
+  if (currentTask->reset) {
+    timesRun = 0;
+    loopsRun = 0;
+  }
   unsigned int note = 0;
 
   if (timesRun < 10) {
-    note = MUSIC_BASE_FREQUENCY + (100 * (timesRun + 1));
+    note = buzzer_notes[timesRun];
     writeRow(1, String(note));
     ledcWrite(0, note);
     timesRun++;
-  }  else if (timesRun == 10) {
+  } 
+  if (timesRun == 9) {
     loopsRun++;
     timesRun = 0;
   }
   
   if (loopsRun == 2) {
     halt_me();
+    ledcWrite(0, 0); // turn off buzzer
+    writeRow(1, String(0));
   } else {
     sleep_me(MUSIC_PLAY_INTERVAL);
   }
 }
 
+// Print the alphabet to the screen one char at a time
 void taskD() {
   static unsigned int currentChar = 65; // increment at the end of the function
   static unsigned int loopsRun = 0;
-
+  if (currentTask->reset) {
+    currentChar = 65;
+    loopsRun = 0;
+  }
   if (currentChar < 91) {
     Serial.println(char(currentChar));
     currentChar++;
@@ -125,26 +168,35 @@ void taskD() {
   }
 }
 
+// Update the priority of the tasks
 void taskE() {
   // Task E code here
   static unsigned int currentScheme = 1; // wrap around from 1 to 3
   for (int i = 0; i < MAX_TASKS - 1; i++) {
     taskList[i].priority = schemeTable[currentScheme - 1][i];
+    taskList[i].state = READY; // Restart all tasks
+    taskList[i].reset = true; 
   }
+  Serial.println("Updated Priority Scheme to Scheme " + String(currentScheme));
   currentScheme = (currentScheme % 3) + 1;
   sleep_me(PRIORITY_UPDATE_INTERVAL);
 }
 
+// Sleep the current task
 void sleep_me(unsigned int ms) {
   currentTask->state = SLEEPING;
   currentTask->lastRunTime = millis();
   currentTask->period = ms;
+  currentTask->reset = false;
 }
 
+// Halt the current task
 void halt_me() {
   currentTask->state = HALTED;
+  currentTask->reset = false;
 }
 
+// Setup the task list
 void setup() {
   Serial.begin(9600);
 
@@ -161,6 +213,7 @@ void setup() {
 
 }
 
+// Priority non-preemptive scheduler
 void loop() {
   bool ranTask = false; // whether or not we have actually run a task yet
 
