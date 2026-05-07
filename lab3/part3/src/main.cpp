@@ -16,6 +16,7 @@
 LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
 
 volatile unsigned long counter = 0;
+unsigned long lastCounter = 0;
 
 // Write a line of text to one of the LCD rows
 void writeRow(int row, String line) {
@@ -48,7 +49,7 @@ void buttonISR() {
 }
 
 void setup() {
- BLEDevice::init("MyESP32");
+ BLEDevice::init("BestESP32");
  BLEServer *pServer = BLEDevice::createServer();
  BLEService *pService = pServer->createService(SERVICE_UUID);
  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
@@ -64,21 +65,21 @@ void setup() {
  pAdvertising->start();
 
 
-   // =========> TODO: Initialize LCD display
-   //
-   lcd.begin();
+  // =========> TODO: Initialize LCD display
+  //
+  lcd.begin();
+  Serial.begin(9600);
+  // =========> TODO: create a timer, attach an interrupt, set an alarm which will
+  //                  update the counter every second.
+  //
+  hw_timer_t *interruptTimer = timerBegin(0, 80, true);
+  timerAttachInterrupt(interruptTimer, timerISR, true);
+  timerAlarmWrite(interruptTimer, 1000000, true);
+  timerAlarmEnable(interruptTimer);
 
-   // =========> TODO: create a timer, attach an interrupt, set an alarm which will
-   //                  update the counter every second.
-   //
-   hw_timer_t *interruptTimer = timerBegin(0, 80, true);
-   timerAttachInterrupt(interruptTimer, timerISR, true);
-   timerAlarmWrite(interruptTimer, 1000000, true);
-   timerAlarmEnable(interruptTimer);
-
-   // ========> TODO: Set button pin as input and attach an interrupt
-   pinMode(BUTTON_PIN, INPUT_PULLUP);
-   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING); 
+  // ========> TODO: Set button pin as input and attach an interrupt
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
 }
 
 
@@ -89,7 +90,10 @@ void loop() {
  //                  If the button has been pressed, print out "Button Pressed"
  //                  on the LCD.
 
-  writeRow(0, String(counter));
+  if (lastCounter != counter) {
+    writeRow(0, String(counter));
+    lastCounter = counter;
+  }
 
   if (but_pressed) {
     but_pressed = false;
