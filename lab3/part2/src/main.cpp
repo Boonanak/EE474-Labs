@@ -11,11 +11,11 @@
 
 #define LED_BLINK_INTERVAL 125
 #define LCD_UPDATE_INTERVAL 2000
-#define MUSIC_PLAY_INTERVAL 500 // delay between notes
+#define MUSIC_PLAY_INTERVAL 200 // delay between notes
 #define ALPHABET_PRINT_INTERVAL 500
 #define PRIORITY_UPDATE_INTERVAL 30000
 
-#define MUSIC_BASE_FREQUENCY 440 // A4 note frequency in Hz
+#define MUSIC_BASE_FREQUENCY 150 // A4 note frequency in Hz
 
 // LCD Stuff
 #define LCD_ADDRESS 0x27
@@ -28,6 +28,9 @@
 #define BUZZER_PIN 2
 
 LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
+
+void sleep_me(unsigned int ms);
+void halt_me();
 
 typedef struct TCB {
   void (*function)(); // pointer to the task function
@@ -47,9 +50,9 @@ TCB taskList[MAX_TASKS];
 TCB *currentTask;
 
 void writeRow(int row, String line) {
-  lcd.setCursor(row,0);
+  lcd.setCursor(0,row);
   lcd.print("                ");
-  lcd.setCursor(row,0);
+  lcd.setCursor(0,row);
   lcd.print(line);
 }
 
@@ -87,7 +90,7 @@ void taskC() {
   unsigned int note = 0;
 
   if (timesRun < 10) {
-    note = MUSIC_BASE_FREQUENCY + (20 * (timesRun + 1));
+    note = MUSIC_BASE_FREQUENCY + (100 * (timesRun + 1));
     writeRow(1, String(note));
     ledcWrite(0, note);
     timesRun++;
@@ -99,7 +102,7 @@ void taskC() {
   if (loopsRun == 2) {
     halt_me();
   } else {
-    sleep_me(LCD_UPDATE_INTERVAL);
+    sleep_me(MUSIC_PLAY_INTERVAL);
   }
 }
 
@@ -110,7 +113,7 @@ void taskD() {
   if (currentChar < 91) {
     Serial.println(char(currentChar));
     currentChar++;
-  }  else if (currentChar == 90) {
+  }  else if (currentChar == 91) {
     loopsRun++;
     currentChar = 65;
   }
@@ -146,7 +149,7 @@ void setup() {
   Serial.begin(9600);
 
   lcd.begin();
-
+  pinMode(LED_PIN, OUTPUT);
   ledcSetup(CHANNEL, FREQ, RES);
   ledcAttachPin(BUZZER_PIN, CHANNEL);
 
