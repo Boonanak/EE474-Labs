@@ -28,19 +28,39 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 
 // ==============> TODO: Create an ISR function to handle button press here.
 
-// put function declarations here:
-int myFunction(int, int);
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+ BLEDevice::init("MyESP32");
+ BLEServer *pServer = BLEDevice::createServer();
+ BLEService *pService = pServer->createService(SERVICE_UUID);
+ BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                        CHARACTERISTIC_UUID,
+                                        BLECharacteristic::PROPERTY_READ |
+                                        BLECharacteristic::PROPERTY_WRITE
+                                      );
+
+
+ pCharacteristic->setCallbacks(new MyCallbacks());
+ pService->start();
+ BLEAdvertising *pAdvertising = pServer->getAdvertising();
+ pAdvertising->start();
+
+
+   // =========> TODO: Initialize LCD display
+   //
+   // =========> TODO: create a timer, attach an interrupt, set an alarm which will
+   //                  update the counter every second.
+   //
+    // ========> TODO: Set button pin as input and attach an interrupt
 }
+
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
+ // =========> TODO: Print out an incrementing counter to the LCD.
+ //                  If a signal has been received over BLE, print out “New
+ //                  Message!” on the LCD.
+ //                  If the button has been pressed, print out "Button Pressed"
+ //                  on the LCD.
 
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+
 }
