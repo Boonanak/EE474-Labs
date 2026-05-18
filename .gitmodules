@@ -1,0 +1,6 @@
+[submodule "libraries/Arduino-LiquidCrystal-I2C"]
+	path = libraries/Arduino-LiquidCrystal-I2C
+	url = https://github.com/johnrickman/LiquidCrystal_I2C.git
+[submodule "libraries/FreeRTOS"]
+	path = libraries/FreeRTOS
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
