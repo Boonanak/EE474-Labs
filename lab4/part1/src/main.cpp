@@ -11,7 +11,7 @@
 #define RES 12
 
 const TickType_t ledTaskExecutionTime = 48000 / portTICK_PERIOD_MS;      // 48 seconds
-const TickType_t counterTaskExecutionTime = 20000 / portTICK_PERIOD_MS;  // 20 seconds
+const TickType_t counterTaskExecutionTime = 20000 / portTICK_PERIOD_MS;  // 20 seconds, SHORTEST
 const TickType_t alphabetTaskExecutionTime = 26000 / portTICK_PERIOD_MS; // 26 seconds
 // Remaining Execution Times
 volatile TickType_t remainingLedTime = ledTaskExecutionTime;
@@ -102,17 +102,78 @@ void alphabetTask(void *arg) {
 }
 
 void scheduleTasks(void *arg) {
-   // TODO: Implement SRTF scheduling logic. This function should select the task with 
-   //       the shortest remaining time and run it. Once a task completes it should 
-   //       reset its remaining time.
-}
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t schedulerTick = 50 / portTICK_PERIOD_MS; // Evaluates timeline every 50ms
+    
+    TaskHandle_t currentlyRunningTask = NULL;
 
+    while (1) {
+        // 1. Reset mechanics: When a task hits 0 remaining time, it resets back to full length
+        if (remainingLedTime == 0) {
+            Serial.println("\n>>> LED Task finished 48s cycle! Resetting... <<<");
+            remainingLedTime = ledTaskExecutionTime;
+        }
+        if (remainingCounterTime == 0) {
+            Serial.println("\n>>> Counter Task finished 20s cycle! Resetting... <<<");
+            remainingCounterTime = counterTaskExecutionTime;
+        }
+        if (remainingAlphabetTime == 0) {
+            Serial.println("\n>>> Alphabet Task finished 26s cycle! Resetting... <<<");
+            remainingAlphabetTime = alphabetTaskExecutionTime;
+        }
+
+        // 2. SRTF Evaluation Logic
+        TickType_t shortestTime = 0xFFFFFFFF; 
+        TaskHandle_t nextTaskToRun = NULL;
+
+        if (remainingLedTime < shortestTime) {
+            shortestTime = remainingLedTime;
+            nextTaskToRun = ledHandle;
+        }
+        if (remainingCounterTime < shortestTime) {
+            shortestTime = remainingCounterTime;
+            nextTaskToRun = counterHandle;
+        }
+        if (remainingAlphabetTime < shortestTime) {
+            shortestTime = remainingAlphabetTime;
+            nextTaskToRun = alphabetHandle;
+        }
+
+        // 3. Preempt / Context Switch
+        if (nextTaskToRun != currentlyRunningTask) {
+            if (currentlyRunningTask != NULL) {
+                vTaskSuspend(currentlyRunningTask);
+            }
+            
+            currentlyRunningTask = nextTaskToRun;
+            
+            if (currentlyRunningTask != NULL) {
+                vTaskResume(currentlyRunningTask);
+            }
+        }
+
+        // 4. Yield CPU back to FreeRTOS to allow the selected worker task to run
+        vTaskDelayUntil(&xLastWakeTime, schedulerTick);
+    }
+}
 
 void setup() {
-   // TODO: Create 4 tasks and pin them to core 0:
-   //          1. A scheduler that handles the scheduling of the other three tasks
-   //          2. Blink an LED
-   //          3. Print a counter to the LCD
-   //          4. Print the alphabet to Serial
+    Serial.begin(9600);
+    delay(1000); 
+    Serial.println("SRTF Scheduler Initializing...");
+
+    // Create the tasks in a suspended state
+    xTaskCreatePinnedToCore(ledTask, "LED Task", 2048, NULL, 1, &ledHandle, 0);
+    vTaskSuspend(ledHandle);
+
+    xTaskCreatePinnedToCore(counterTask, "Counter Task", 2048, NULL, 1, &counterHandle, 0);
+    vTaskSuspend(counterHandle);
+
+    xTaskCreatePinnedToCore(alphabetTask, "Alphabet Task", 2048, NULL, 1, &alphabetHandle, 0);
+    vTaskSuspend(alphabetHandle);
+
+    // Create the scheduler with a HIGHER priority (2) so it can preempt worker tasks (1)
+    xTaskCreatePinnedToCore(scheduleTasks, "SRTF Scheduler", 3072, NULL, 2, NULL, 0);
 }
+
 void loop() {}
