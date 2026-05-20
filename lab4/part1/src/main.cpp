@@ -18,6 +18,8 @@ volatile TickType_t remainingLedTime = ledTaskExecutionTime;
 volatile TickType_t remainingCounterTime = counterTaskExecutionTime;
 volatile TickType_t remainingAlphabetTime = alphabetTaskExecutionTime;
 
+#define LED_PIN 4
+
 TaskHandle_t ledHandle = NULL;
 TaskHandle_t counterHandle = NULL;
 TaskHandle_t alphabetHandle = NULL;
@@ -43,9 +45,6 @@ void executeDelay(TickType_t delayTicks, volatile TickType_t *remainingTime) {
 }
 
 void ledTask(void *arg) {
-    const int LED_PIN = 4; // UPDATE TO ACTUAL LED PIN
-    pinMode(LED_PIN, OUTPUT);
-
     // One complete pattern loop = 2s + 0.95s + 0.1s + 0.95s = 4 seconds
     const TickType_t tOn1  = 2000 / portTICK_PERIOD_MS;
     const TickType_t tOff1 = 950 / portTICK_PERIOD_MS;
@@ -101,59 +100,61 @@ void alphabetTask(void *arg) {
     }
 }
 
+// Implementation a Shortest Remaining Time First scheduler with priority one which
+// Checks the remaining execution time of each task. It will run any ready task with shortest
+// remaining time, and suspend all other ready tasks. 
+// if a task is suspended, and it has the shortest remaining time, it will be resumed.
 void scheduleTasks(void *arg) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t schedulerTick = 50 / portTICK_PERIOD_MS; // Evaluates timeline every 50ms
-    
-    TaskHandle_t currentlyRunningTask = NULL;
-
+   TickType_t lastWakeTime = xTaskGetTickCount();
     while (1) {
-        // 1. Reset mechanics: When a task hits 0 remaining time, it resets back to full length
-        if (remainingLedTime == 0) {
-            Serial.println("\n>>> LED Task finished 48s cycle! Resetting... <<<");
+         // get the current state of all tasks
+         eTaskState ledState = eTaskGetState(ledHandle);
+         eTaskState counterState = eTaskGetState(counterHandle);
+         eTaskState alphabetState = eTaskGetState(alphabetHandle);
+
+         TaskHandle_t shortestTask = NULL;
+         TickType_t shortestTime = portMAX_DELAY;
+
+         if (remainingLedTime == 0) {
             remainingLedTime = ledTaskExecutionTime;
-        }
-        if (remainingCounterTime == 0) {
-            Serial.println("\n>>> Counter Task finished 20s cycle! Resetting... <<<");
+         }
+         if (remainingCounterTime == 0) {
             remainingCounterTime = counterTaskExecutionTime;
-        }
-        if (remainingAlphabetTime == 0) {
-            Serial.println("\n>>> Alphabet Task finished 26s cycle! Resetting... <<<");
+         }
+         if (remainingAlphabetTime == 0) {
             remainingAlphabetTime = alphabetTaskExecutionTime;
-        }
+         }
 
-        // 2. SRTF Evaluation Logic
-        TickType_t shortestTime = 0xFFFFFFFF; 
-        TaskHandle_t nextTaskToRun = NULL;
+         // Find the task with the shortest time that it ready or suspended
+         if ((ledState == eReady || ledState == eSuspended) && remainingLedTime < shortestTime) {
+             shortestTime = remainingLedTime;
+             shortestTask = ledHandle;
+         }
+         if ((counterState == eReady || counterState == eSuspended) && remainingCounterTime < shortestTime) {
+             shortestTime = remainingCounterTime;
+             shortestTask = counterHandle;
+         }
+         if ((alphabetState == eReady || alphabetState == eSuspended) && remainingAlphabetTime < shortestTime) {
+             shortestTime = remainingAlphabetTime;
+             shortestTask = alphabetHandle;
+         }
 
-        if (remainingLedTime < shortestTime) {
-            shortestTime = remainingLedTime;
-            nextTaskToRun = ledHandle;
-        }
-        if (remainingCounterTime < shortestTime) {
-            shortestTime = remainingCounterTime;
-            nextTaskToRun = counterHandle;
-        }
-        if (remainingAlphabetTime < shortestTime) {
-            shortestTime = remainingAlphabetTime;
-            nextTaskToRun = alphabetHandle;
-        }
+         // Resume the task with the shortest remaining time if it's not already running
+         if (shortestTask != NULL) vTaskResume(shortestTask);
 
-        // 3. Preempt / Context Switch
-        if (nextTaskToRun != currentlyRunningTask) {
-            if (currentlyRunningTask != NULL) {
-                vTaskSuspend(currentlyRunningTask);
-            }
-            
-            currentlyRunningTask = nextTaskToRun;
-            
-            if (currentlyRunningTask != NULL) {
-                vTaskResume(currentlyRunningTask);
-            }
-        }
+         // Suspend all other ready tasks that are not the shortest
+         if (ledHandle != shortestTask && ledState == eReady) {
+             vTaskSuspend(ledHandle);
+         }
+         if (counterHandle != shortestTask && counterState == eReady) {
+             vTaskSuspend(counterHandle);
+         }
+         if (alphabetHandle != shortestTask && alphabetState == eReady) {
+             vTaskSuspend(alphabetHandle);
+         }
 
-        // 4. Yield CPU back to FreeRTOS to allow the selected worker task to run
-        vTaskDelayUntil(&xLastWakeTime, schedulerTick);
+         // Yield scheduler
+         vTaskDelayUntil(&lastWakeTime, 50 / portTICK_PERIOD_MS);
     }
 }
 
@@ -161,11 +162,13 @@ void setup() {
     Serial.begin(9600);
     delay(1000); 
     Serial.println("SRTF Scheduler Initializing...");
+    lcd.init();
+    lcd.backlight();
+    pinMode(LED_PIN, OUTPUT);
 
     // Create the tasks in a suspended state
     xTaskCreatePinnedToCore(ledTask, "LED Task", 2048, NULL, 1, &ledHandle, 0);
     vTaskSuspend(ledHandle);
-
     xTaskCreatePinnedToCore(counterTask, "Counter Task", 2048, NULL, 1, &counterHandle, 0);
     vTaskSuspend(counterHandle);
 
