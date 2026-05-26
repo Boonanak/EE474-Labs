@@ -1,3 +1,16 @@
+/**
+ * @file main.cpp
+ * @author Vance Borus & Sean Bubernak
+ * @brief Lab 4 Part 2: FreeRTOS Multicore Task Management with Anomaly Detection and LCD Display
+ * @version 1.0
+ * @date 2026-05-26
+ * 
+ * @copyright Copyright (c) 2026
+ * 
+ */
+
+// AICODE - CoPilot-300
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -37,7 +50,13 @@ void vPrimeCalculationTask(void *pvParameters);
 bool isPrime(int n);
 
 int averageLight = 0; // Shared variable for average light level, updated by Light Detector Task and read by LCD Task
+int lightValue = 0;
 
+/**
+ * @brief Intializes the LCD screen, creates FreeRTOS tasks for light detection, LCD display, 
+ * anomaly alarm, and prime calculation, and starts the scheduler.
+ * 
+ */
 void setup() {
     // Init
     Serial.begin(9600);
@@ -102,7 +121,11 @@ void setup() {
 
 void loop() {}
 
-// CORE 0: Light Detector Task
+/**
+ * @brief Computes an SMA of light readings every 500ms
+ * Runs on CORE0, producer for the semaphore
+ * 
+ */
 void vLightDetectorTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay500ms = pdMS_TO_TICKS(500);
@@ -117,7 +140,10 @@ void vLightDetectorTask(void *pvParameters) {
     }
 }
 
-// CORE 0: LCD Task
+/**
+ * @brief 
+ * 
+ */
 void vLCDTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay250ms = pdMS_TO_TICKS(250);
@@ -125,27 +151,40 @@ void vLCDTask(void *pvParameters) {
     // TODO
 }
 
-// CORE 1: Anomaly Alarm Task
+/**
+ * @brief Checks if the average light level is outside the defined thresholds and 
+ * flashes an alarm LED if an anomaly is detected. Runs on CORE1
+ * Alarm happens if the average light level is above HIGH_THRESH or below LOW_THRESH, 
+ * flashing the LED 3 times with a delay in between to make it noticeable, then waits for 
+ * 2 seconds before checking again to avoid rapid flashing. If the light level is normal, ensures the alarm LED is off.
+ * 
+ */
 void vAnomalyAlarmTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay250ms = pdMS_TO_TICKS(250); // Checks every display cycle timing
-    if (xSemaphoreTake(xLightDataSemaphore, portMAX_DELAY) == pdTRUE) {
-        if (averageLight > HIGH_THRESH || averageLight < LOW_THRESH) {
-            for (int i = 0; i < 3; i++) { // Flash alarm LED 3 times
-                digitalWrite(ALARM_LED_PIN, HIGH);
-                vTaskDelay(pdMS_TO_TICKS(166));
+    while (1) {
+        if (xSemaphoreTake(xLightDataSemaphore, portMAX_DELAY) == pdTRUE) {
+            if (averageLight > HIGH_THRESH || averageLight < LOW_THRESH) {
+                for (int i = 0; i < 3; i++) { // Flash alarm LED 3 times
+                    digitalWrite(ALARM_LED_PIN, HIGH);
+                    vTaskDelay(pdMS_TO_TICKS(166));
+                    digitalWrite(ALARM_LED_PIN, LOW);
+                    vTaskDelay(pdMS_TO_TICKS(166));
+                }
+                vTaskDelay(pdMS_TO_TICKS(2000)); // Wait before checking again to avoid rapid flashing
+            } else {
                 digitalWrite(ALARM_LED_PIN, LOW);
-                vTaskDelay(pdMS_TO_TICKS(166));
             }
-            vTaskDelay(pdMS_TO_TICKS(2000)); // Wait before checking again to avoid rapid flashing
-        } else {
-            digitalWrite(ALARM_LED_PIN, LOW);
         }
+        vTaskDelay(xDelay250ms);
     }
-    vTaskDelay(xDelay250ms);
 }
 
-// CORE 1: Prime Calculation Task
+/**
+ * @brief Computes prime numbers up to 5000 in the background, printing them to Serial. 
+ * Runs on CORE1 with lowest priority, yielding frequently to allow other tasks to run smoothly.
+ * 
+ */
 void vPrimeCalculationTask(void *pvParameters) {
     // Computes math in background loop
     for (int i = 2; i <= 5000; i++) {
@@ -162,7 +201,13 @@ void vPrimeCalculationTask(void *pvParameters) {
     vTaskSuspend(xPrimeHandle);
 }
 
-// Helper math function
+/**
+ * @brief Checks if a number is prime
+ * 
+ * @param n Number to check
+ * @return true if prime
+ * @return false if not prime
+ */
 bool isPrime(int n) {
     if (n <= 1) return false;
     if (n <= 3) return true;
@@ -173,6 +218,12 @@ bool isPrime(int n) {
     return true;
 }
 
+/**
+ * @brief computes the SMA of the values in the array
+ * 
+ * @param arr pointer to array of light readings
+ * @return int average of the values in the array
+ */
 int calculateAverage(int *arr) {
     int sum = 0;
     for (int i = 0; i < SMA_WINDOW_SIZE; i++) {
@@ -181,6 +232,12 @@ int calculateAverage(int *arr) {
     return sum / SMA_WINDOW_SIZE;
 }
 
+/**
+ * @brief shifts a value into the end of the array, pushing out the top value
+ * 
+ * @param arr array to have shifted in
+ * @param newValue value to shift into the top
+ */
 void shiftArray(int *arr, int newValue) {
     for (int i = 0; i < SMA_WINDOW_SIZE - 1; i++) {
         arr[i] = arr[i + 1];
