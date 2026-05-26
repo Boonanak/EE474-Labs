@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <FreeRTOS.h>
+#include <task.h>
+#include <semphr.h>
 
 // LCD Stuff
 #define LCD_ADDRESS 0x27
@@ -10,6 +13,10 @@
 #define LDR_PIN          5    // ADC pin for the Photoresistor voltage divider
 #define ALARM_LED_PIN    4     // LED for Anomaly Alarm
 #define SMA_WINDOW_SIZE  10
+
+// Anomaly Detection Threshold
+#define LOW_THRESH 300
+#define HIGH_THRESH 3800
 
 // Global Variables
 
@@ -29,6 +36,8 @@ void vAnomalyAlarmTask(void *pvParameters);
 void vPrimeCalculationTask(void *pvParameters);
 bool isPrime(int n);
 
+int averageLight = 0; // Shared variable for average light level, updated by Light Detector Task and read by LCD Task
+
 void setup() {
     // Init
     Serial.begin(9600);
@@ -43,8 +52,8 @@ void setup() {
 
     // Create Binary Semaphore
 
-    // TODO
-
+    xLightDataSemaphore = xSemaphoreCreateBinary();
+    xSemaphoreGive(xLightDataSemaphore); // Start with semaphore available
     // Create Tasks and Assign to Cores
     // Core 0 Tasks
     xTaskCreatePinnedToCore(
@@ -102,7 +111,8 @@ void vLightDetectorTask(void *pvParameters) {
     while (1) {
         int lightValue = analogRead(LDR_PIN);
         shiftArray(lightReadings, lightValue);
-        int averageLight = caculateAverage(lightReadings);
+        averageLight = calculateAverage(lightReadings);
+        xSemaphoreGive(xLightDataSemaphore); // Signal LCD Task that new data is available
         vTaskDelay(xDelay500ms);
     }
 }
@@ -119,8 +129,20 @@ void vLCDTask(void *pvParameters) {
 void vAnomalyAlarmTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay250ms = pdMS_TO_TICKS(250); // Checks every display cycle timing
-  
-    // TODO
+    if (xSemaphoreTake(xLightDataSemaphore, portMAX_DELAY) == pdTRUE) {
+        if (averageLight > HIGH_THRESH || averageLight < LOW_THRESH) {
+            for (int i = 0; i < 3; i++) { // Flash alarm LED 3 times
+                digitalWrite(ALARM_LED_PIN, HIGH);
+                vTaskDelay(pdMS_TO_TICKS(166));
+                digitalWrite(ALARM_LED_PIN, LOW);
+                vTaskDelay(pdMS_TO_TICKS(166));
+            }
+            vTaskDelay(pdMS_TO_TICKS(2000)); // Wait before checking again to avoid rapid flashing
+        } else {
+            digitalWrite(ALARM_LED_PIN, LOW);
+        }
+    }
+    vTaskDelay(xDelay250ms);
 }
 
 // CORE 1: Prime Calculation Task
@@ -151,7 +173,7 @@ bool isPrime(int n) {
     return true;
 }
 
-int caculateAverage(int *arr) {
+int calculateAverage(int *arr) {
     int sum = 0;
     for (int i = 0; i < SMA_WINDOW_SIZE; i++) {
         sum += arr[i];
