@@ -48,6 +48,10 @@ void vLCDTask(void *pvParameters);
 void vAnomalyAlarmTask(void *pvParameters);
 void vPrimeCalculationTask(void *pvParameters);
 bool isPrime(int n);
+int calculateAverage(int *arr);
+void shiftArray(int *arr, int newValue);
+
+
 
 int averageLight = 0; // Shared variable for average light level, updated by Light Detector Task and read by LCD Task
 int lightValue = 0;
@@ -132,7 +136,7 @@ void vLightDetectorTask(void *pvParameters) {
     // Initialize light reading buffer with current reading from the pin
     static int lightReadings[SMA_WINDOW_SIZE] = {analogRead(LDR_PIN)};
     while (1) {
-        int lightValue = analogRead(LDR_PIN);
+        lightValue = analogRead(LDR_PIN);
         shiftArray(lightReadings, lightValue);
         averageLight = calculateAverage(lightReadings);
         xSemaphoreGive(xLightDataSemaphore); // Signal LCD Task that new data is available
@@ -141,14 +145,35 @@ void vLightDetectorTask(void *pvParameters) {
 }
 
 /**
- * @brief 
- * 
+ * @brief Display the simple moving average and current light level data to the LCD 
+ * Tied to core 0, consumer of the semaphore
  */
 void vLCDTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay250ms = pdMS_TO_TICKS(250);
 
-    // TODO
+    int localLight = 0;
+    float localSMA = 0.0;
+
+    lcd.clear();
+
+    while(1) {
+        if (xSemaphoreTake(xLightDataSemaphore, portMAX_DELAY) == pdTRUE) {
+            localLight = lightValue;
+            localSMA = averageLight;
+
+            lcd.setCursor(0, 0);
+            lcd.print("Light: ");
+            lcd.print(localLight);
+            lcd.print("    "); // Clear trailing characters
+
+            lcd.setCursor(0, 1);
+            lcd.print("SMA:   ");
+            lcd.print(localSMA, 1);
+            lcd.print("    ");
+        }
+            vTaskDelay(xDelay250ms);
+        }
 }
 
 /**
