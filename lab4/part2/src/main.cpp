@@ -7,7 +7,7 @@
 #define RES 12
 
 // Configuration & Pins 
-#define LDR_PIN          34    // ADC pin for the Photoresistor voltage divider
+#define LDR_PIN          5    // ADC pin for the Photoresistor voltage divider
 #define ALARM_LED_PIN    4     // LED for Anomaly Alarm
 #define SMA_WINDOW_SIZE  10
 
@@ -52,7 +52,7 @@ void setup() {
         "Light Detector",       // Task name
         4096,                   // Stack size
         NULL,                   // Parameters
-        3,                      // Priority (Higher priority for real-time acquisition)
+        1,                      // Priority (Higher priority for real-time acquisition)
         &xLightDetectorHandle,  // Task handle
         0                       // Core ID
     );
@@ -83,7 +83,7 @@ void setup() {
         "Prime Calc",
         4096,
         NULL,
-        1,                      // Low priority (background execution)
+        3,                      // Low priority (background execution)
         &xPrimeHandle,
         1                       // Core ID
     );
@@ -97,8 +97,14 @@ void loop() {}
 void vLightDetectorTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xDelay500ms = pdMS_TO_TICKS(500);
-
-    // TODO
+    // Initialize light reading buffer with current reading from the pin
+    static int lightReadings[SMA_WINDOW_SIZE] = {analogRead(LDR_PIN)};
+    while (1) {
+        int lightValue = analogRead(LDR_PIN);
+        shiftArray(lightReadings, lightValue);
+        int averageLight = caculateAverage(lightReadings);
+        vTaskDelay(xDelay500ms);
+    }
 }
 
 // CORE 0: LCD Task
@@ -130,8 +136,8 @@ void vPrimeCalculationTask(void *pvParameters) {
 
     Serial.println("--- Background Prime Calculations Completed up to 5000 ---");
     
-    // Self terminate task once processing ends, move to setup?
-    vTaskDelete(NULL);
+    // Self terminate task once processing ends
+    vTaskSuspend(xPrimeHandle);
 }
 
 // Helper math function
@@ -143,4 +149,19 @@ bool isPrime(int n) {
         if (n % i == 0 || n % (i + 2) == 0) return false;
     }
     return true;
+}
+
+int caculateAverage(int *arr) {
+    int sum = 0;
+    for (int i = 0; i < SMA_WINDOW_SIZE; i++) {
+        sum += arr[i];
+    }
+    return sum / SMA_WINDOW_SIZE;
+}
+
+void shiftArray(int *arr, int newValue) {
+    for (int i = 0; i < SMA_WINDOW_SIZE - 1; i++) {
+        arr[i] = arr[i + 1];
+    }
+    arr[SMA_WINDOW_SIZE - 1] = newValue;
 }
