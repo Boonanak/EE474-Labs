@@ -1,6 +1,6 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
-#include <BLEServer.h>
+#include <BLEScan.h>
 #include <LiquidCrystal_I2C.h>
 #include <Arduino.h>
 
