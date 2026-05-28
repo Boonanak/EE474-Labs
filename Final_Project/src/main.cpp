@@ -22,19 +22,34 @@
 // IR reciever
 #define IR_RECV 10
 
+// System state
 volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
 volatile bool shoot_pressed = false;
 volatile bool req_pressed = false;
 
+// Client connection variables
+bool isClient = false;
+bool connectedToServer = false;
+BLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
+BLEAdvertisedDevice* targetDevice = nullptr;
 
-class MyCallbacks: public BLECharacteristicCallbacks {
+class MyServerCallbacks: public BLECharacteristicCallbacks {
    void onWrite(BLECharacteristic *pCharacteristic) {
-     // =========> TODO: This callback function will be invoked when signal is
-     // 		     received over BLE. Implement the necessary functionality that
-     //		     will trigger the message to the LCD.
-    BLE_tripped = true;    
+     // This fires on the SERVER esp when the CLIENT esp sends a message
+     BLE_tripped = true;    
    }
+};
+
+class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    // Look for a device advertising our exact game Service UUID
+    if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
+      BLEDevice::getScan()->stop(); // Found it! Stop looking.
+      targetDevice = new BLEAdvertisedDevice(advertisedDevice);
+      isClient = true; // Flag to execute connection in the loop
+    }
+  }
 };
 
 void pairISR() {
@@ -49,21 +64,29 @@ void reqISR() {
   req_pressed = true;
 }
 
+// Helper function for Client Connection
+bool connectToServer() {
+  BLEClient* pClient = BLEDevice::createClient();
+  if (!pClient->connect(targetDevice)) return false;
+
+  BLERemoteService* pRemoteService = pClient->getService(BLEUUID(SERVICE_UUID));
+  if (pRemoteService == nullptr) return false;
+
+  pRemoteCharacteristic = pRemoteService->getCharacteristic(BLEUUID(CHARACTERISTIC_UUID));
+  if (pRemoteCharacteristic == nullptr) return false;
+
+  return true;
+}
+
 void setup() {
- BLEDevice::init("BestESP32");
- BLEServer *pServer = BLEDevice::createServer();
- BLEService *pService = pServer->createService(SERVICE_UUID);
- BLECharacteristic *pCharacteristic = pService->createCharacteristic(
-                                        CHARACTERISTIC_UUID,
-                                        BLECharacteristic::PROPERTY_READ |
-                                        BLECharacteristic::PROPERTY_WRITE
-                                      );
+  Serial.begin(9600);
 
-
- pCharacteristic->setCallbacks(new MyCallbacks());
- pService->start();
- BLEAdvertising *pAdvertising = pServer->getAdvertising();
- pAdvertising->start();
+  // Initialize LEDs
+  pinMode(PAIR_STATUS_LED, OUTPUT);
+  pinMode(GAME_STATUS_LED, OUTPUT);
+  pinMode(ALIVE_STATUS_LED, OUTPUT);
+  pinMode(DEAD_STATUS_LED, OUTPUT);
+  digitalWrite(ALIVE_STATUS_LED, HIGH); // Default to alive
 
   // Set button pins as inputs and attach interrupts
   pinMode(PAIR_BUTTON, INPUT_PULLUP);
@@ -73,11 +96,27 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(SHOOT_BUTTON), shootISR, FALLING);
 
   pinMode(REQ_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
+
+  BLEDevice::init("GameESP32");
+  BLEServer *pServer = BLEDevice::createServer();
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                         CHARACTERISTIC_UUID,
+                                         BLECharacteristic::PROPERTY_READ |
+                                         BLECharacteristic::PROPERTY_WRITE
+                                       );
+
+  pCharacteristic->setCallbacks(new MyServerCallbacks());
+  pService->start();
+  
+  // Start advertising so other ESPs can find us
+  BLEAdvertising *pAdvertising = pServer->getAdvertising();
+  pAdvertising->start();
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
 
-
+  
 }
