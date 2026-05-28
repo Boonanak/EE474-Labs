@@ -26,7 +26,14 @@ volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
 volatile bool shoot_pressed = false;
 volatile bool req_pressed = false;
+volatile bool hitDetected = false;
 
+// ISR for when the IR receiver detects a hit
+// Detaches itself to prevent multiple triggers
+void IRAM_ATTR ir_isr() {
+  hitDetected = true;
+  detachInterrupt(IR_RECV);
+}
 
 class MyCallbacks: public BLECharacteristicCallbacks {
    void onWrite(BLECharacteristic *pCharacteristic) {
@@ -74,6 +81,9 @@ void setup() {
 
   pinMode(REQ_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+
+  pinMode(IR_RECV, INPUT);
+  attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
 }
 
 void loop() {
