@@ -29,6 +29,30 @@ volatile bool shoot_pressed = false;
 volatile bool req_pressed = false;
 volatile bool hitDetected = false;
 
+// Current state of the game
+// Unpaired: not currently paired to another ESP32, waiting for a connection
+// Game Over: Paired but game is not active, awaiting start request
+// Request Game: Sent a request/received a request to start the game, awaiting confirmation
+// Game Active: Game is ongoing, waiting to be hit or receive a game over signal
+typedef enum GameState {
+  UNPAIRED,
+  GAME_OVER,
+  REQUEST_GAME,
+  GAME_ACTIVE
+} GameState;
+
+GameState currentState = UNPAIRED;
+
+// Messages sent by the esp 32 to it's opponent
+// Request Game: Message saying a game has been requested
+// Game Accepted: Message saying a requested game has been accepted
+// Game Over: message saying someone has been hit and the game is over
+typedef enum BLEMessage {
+  REQUEST_GAME_MSG,
+  GAME_ACCEPTED_MSG,
+  GAME_OVER_MSG
+} BLEMessage;
+
 // Client connection variables
 bool isClient = false;
 bool connectedToServer = false;
