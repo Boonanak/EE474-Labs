@@ -27,6 +27,7 @@ volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
 volatile bool shoot_pressed = false;
 volatile bool req_pressed = false;
+volatile bool hitDetected = false;
 
 // Client connection variables
 bool isClient = false;
@@ -64,6 +65,13 @@ void reqISR() {
   req_pressed = true;
 }
 
+// ISR for when the IR receiver detects a hit
+// Detaches itself to prevent multiple triggers
+void IRAM_ATTR ir_isr() {
+  hitDetected = true;
+  detachInterrupt(IR_RECV);
+}
+
 // Helper function for Client Connection
 bool connectToServer() {
   BLEClient* pClient = BLEDevice::createClient();
@@ -88,16 +96,6 @@ void setup() {
   pinMode(DEAD_STATUS_LED, OUTPUT);
   digitalWrite(ALIVE_STATUS_LED, HIGH); // Default to alive
 
-  // Set button pins as inputs and attach interrupts
-  pinMode(PAIR_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
-
-  pinMode(SHOOT_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(SHOOT_BUTTON), shootISR, FALLING);
-
-  pinMode(REQ_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
-
   BLEDevice::init("GameESP32");
   BLEServer *pServer = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -109,14 +107,29 @@ void setup() {
 
   pCharacteristic->setCallbacks(new MyServerCallbacks());
   pService->start();
-  
+
+  // Set button pins as inputs and attach interrupts
+  pinMode(PAIR_BUTTON, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
+
+  pinMode(SHOOT_BUTTON, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(SHOOT_BUTTON), shootISR, FALLING);
+
+  pinMode(REQ_BUTTON, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
+
   // Start advertising so other ESPs can find us
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->start();
+  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+
+  pinMode(IR_RECV, INPUT);
+  attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+  
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
 
-  
+
 }
