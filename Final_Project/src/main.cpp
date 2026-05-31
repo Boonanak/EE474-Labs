@@ -14,10 +14,10 @@
 #define REQ_BUTTON 5
 
 // LEDs
-#define PAIR_STATUS_LED 6 //flashing if pairing, solid if paired, off if not paired
-#define GAME_STATUS_LED 7 //flashing if requested, solid if active, off if not active
-#define ALIVE_STATUS_LED 8
-#define DEAD_STATUS_LED 9
+#define PAIR_STATUS_LED 6 // flashing if pairing, solid if paired, off if not paired
+#define GAME_STATUS_LED 7 // flashing if requested, solid if active, off if not active
+#define ALIVE_STATUS_LED 8 // solid if alive, off if hit
+#define DEAD_STATUS_LED 9 // off if alive, on if hit and game is over
 
 // IR reciever
 #define IR_RECV 10
@@ -41,7 +41,7 @@ typedef enum GameState {
   GAME_ACTIVE
 } GameState;
 
-GameState currentState = UNPAIRED;
+volatile GameState currentState = UNPAIRED;
 
 // Messages sent by the esp 32 to it's opponent
 // Request Game: Message saying a game has been requested
@@ -56,6 +56,7 @@ typedef enum BLEMessage {
 // Client connection variables
 bool isClient = false;
 bool connectedToServer = false;
+bool isRequestor = false; // Whether or not THIS esp32 requested the game, or if the opponent did
 BLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
 BLEAdvertisedDevice* targetDevice = nullptr;
 
@@ -93,7 +94,7 @@ void reqISR() {
 // Detaches itself to prevent multiple triggers
 void IRAM_ATTR ir_isr() {
   hitDetected = true;
-  detachInterrupt(IR_RECV);
+  detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
 // Helper function for Client Connection
@@ -109,6 +110,84 @@ bool connectToServer() {
 
   return true;
 }
+
+// TASK FUNCTIONS
+void pairDevices(void* p) {
+  while (true) {
+
+  }
+}
+
+void handleGameState(void *p) {
+  while (true) {
+    switch(currentState) {
+      // In unpaired, we need to wait until we establish a connection with
+      // an opponent. Once that is complete we move to GAME_OVER 
+      // when moving, detatch interrupt for pair button
+      case UNPAIRED: {
+        break;        
+      }
+      // In game over, the game is not active. Detatch interrupts for the shoot button, listen for game requests
+      // and game request button interrupts.
+      // If a game request is sent OR recieved, move to request game
+      // if this ESP32 is the requestor, set the isRequestor flag
+      case GAME_OVER: {
+        break;
+      }
+      // If in request game, waiting for both ESP32s to accept the game
+      // If isRequestor, wait for a GAME_ACCEPTED_MSG from the opponent, then wait 3 seconds before moving to game active
+      // if not isRequestor, wait until the accept button isr flag has been set, then send GAME_ACCEPTED_MSG and move to game
+      // active in 3.2 seconds
+      // When transitioning, detach interrupts for game button, attach interrupt for hit detection
+      case REQUEST_GAME: {
+        break;
+      }
+      // If in game active, check hit detection flag constantly
+      // if a hit is detected send a GAME_OVER_MSG and move to GAME_OVER
+      // if a GAME_OVER_MSG is detected, move to GAME_OVER
+      // when transitioning, detatch interrupt for hit detection, and attach game button interrupt
+      case GAME_ACTIVE: {
+        break;
+      }
+    }
+  }
+}
+
+void ledHandler(void *p) {
+  while(true) {
+    switch(currentState) {
+      // Blue: off normally, blinking if pairing flag set
+      // Yellow: off
+      // Green: off 
+      // Red: off
+      case UNPAIRED: {
+
+      }
+      // Blue: solid on
+      // Yellow: off
+      // Green: retain last state
+      // Red: opposite of Green
+      case GAME_OVER: {
+
+      }
+      // Blue: solid on
+      // Yellow: blinking
+      // Green: retain last state
+      // Red: opposite of green
+      case REQUEST_GAME: {
+
+      }
+      // Blue: solid on
+      // Yellow: solid on
+      // Green: solid on if no hit is detected, off if hit detected
+      // Red: opposite of green
+      case GAME_ACTIVE: {
+
+      }
+    }
+  }
+}
+
 
 void setup() {
   Serial.begin(9600);
@@ -148,12 +227,9 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
 
   pinMode(IR_RECV, INPUT);
-  attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+  //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
   
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-
-
-}
+// Empty in FreeRTOS
+void loop() {}
