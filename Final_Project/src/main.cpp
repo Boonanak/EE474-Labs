@@ -340,7 +340,8 @@ void setup() {
 
   pinMode(IR_RECV, INPUT);
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
-  
+  xTaskCreatePinnedToCore(pairDevices, "Pairing Task", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(ledHandler, "LED Task", 2048, NULL, 1, NULL, 1);
 }
 
 // Empty in FreeRTOS
