@@ -79,6 +79,7 @@ class AdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
             // Store target device information pointer
             pServerAddress = new BLEAddress(advertisedDevice.getAddress());
             foundTargetDevice = true;
+            Serial.println("Message recieved!");
         }
     }
 public:
