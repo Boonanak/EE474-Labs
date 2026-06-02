@@ -283,7 +283,7 @@ void ledHandler(void *p) {
         digitalWrite(PAIR_STATUS_LED, pair_led_state);
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, !alive_led_state);
-        if (game_led_state) {
+        if (req_pressed) {
           game_led_state = !game_led_state;
           digitalWrite(GAME_STATUS_LED, game_led_state);
         } else {
@@ -328,22 +328,13 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
 
   pinMode(REQ_BUTTON, INPUT_PULLUP);
-  //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
-
-  //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
 
   pinMode(IR_RECV, INPUT);
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
   xTaskCreatePinnedToCore(pairDevices, "Pairing Task", 4096, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(ledHandler, "LED Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(handleGameState, "Game Task", 2048, NULL, 1, NULL, 1);
 }
 
 // Empty in FreeRTOS
-void loop() {
-  /*
-  Serial.println("Hit Status: " + String(hitDetected));
-  Serial.println("Pair Pressed: " + String(pair_pressed));
-  Serial.println("Request Pressed: " + String(req_pressed));
-  delay(1000);
-  */
-}
+void loop() {}
