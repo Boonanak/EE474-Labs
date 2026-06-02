@@ -104,6 +104,23 @@ void IRAM_ATTR ir_isr() {
   detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
+void sendMessage(BLEMessage msg) {
+  if (pRemoteCharacteristic != nullptr) {
+    pRemoteCharacteristic->setValue((uint8_t*)&msg, sizeof(msg));
+    pRemoteCharacteristic->notify();
+  }
+}
+
+bool checkForRecievedMessages(BLEMessage msg) {
+  if (pRemoteCharacteristic != nullptr) {
+    std::string value = pRemoteCharacteristic->readValue();
+    if (value.length() > 0 && value[0] == (char)msg) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // TASK FUNCTIONS
 void pairDevices(void* p) {
   // 1. Initial State: Boot up in Peripheral (Server) Mode
@@ -211,6 +228,18 @@ void handleGameState(void *p) {
       // If a game request is sent OR recieved, move to request game
       // if this ESP32 is the requestor, set the isRequestor flag
       case GAME_OVER: {
+        if (req_pressed) {
+          isRequestor = true;
+          currentState = REQUEST_GAME;
+          req_pressed = false;
+          detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
+          sendMessage(REQUEST_GAME_MSG); 
+        } else if (checkForRecievedMessages(REQUEST_GAME_MSG)) {
+          isRequestor = false;
+          currentState = REQUEST_GAME;
+        } else {
+          currentState = GAME_OVER;
+        }
         break;
       }
       // If in request game, waiting for both ESP32s to accept the game
@@ -219,6 +248,22 @@ void handleGameState(void *p) {
       // active in 3.2 seconds
       // When transitioning, detach interrupts for game button, attach interrupt for hit detection
       case REQUEST_GAME: {
+        if (isRequestor) {
+          if (checkForRecievedMessages(GAME_ACCEPTED_MSG)) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            currentState = GAME_ACTIVE;
+            attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+          }
+        } else {
+          if (req_pressed) {
+            sendMessage(GAME_ACCEPTED_MSG);
+            vTaskDelay(pdMS_TO_TICKS(3200));
+            currentState = GAME_ACTIVE;
+            req_pressed = false;
+            detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
+            attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+          }
+        }
         break;
       }
       // If in game active, check hit detection flag constantly
@@ -226,9 +271,23 @@ void handleGameState(void *p) {
       // if a GAME_OVER_MSG is detected, move to GAME_OVER
       // when transitioning, detatch interrupt for hit detection, and attach game button interrupt
       case GAME_ACTIVE: {
+        if (hitDetected) {
+          sendMessage(GAME_OVER_MSG);
+          hitDetected = false;
+          currentState = GAME_OVER;
+          detachInterrupt(digitalPinToInterrupt(IR_RECV));
+          attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+        } else if (checkForRecievedMessages(GAME_OVER_MSG)) {
+          currentState = GAME_OVER;
+          detachInterrupt(digitalPinToInterrupt(IR_RECV));
+          attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+        } else {
+          currentState = GAME_ACTIVE;
+        }
         break;
       }
     }
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -336,6 +395,7 @@ void setup() {
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
   xTaskCreatePinnedToCore(pairDevices, "Pairing Task", 4096, NULL, 1, NULL, 0);
   xTaskCreatePinnedToCore(ledHandler, "LED Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(handleGameState, "Game Task", 2048, NULL, 1, NULL, 1);
 }
 
 // Empty in FreeRTOS
