@@ -120,6 +120,15 @@ void handleGameState(void *p) {
       // an opponent. Once that is complete we move to GAME_OVER 
       // when moving, detatch interrupt for pair button
       case UNPAIRED: {
+        if (connectedToServer) {
+          currentState = GAME_OVER;
+          pair_pressed = false;
+          req_pressed = false;
+          detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
+          attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+        } else {
+          currentState = UNPAIRED;
+        }
         break;        
       }
       // In game over, the game is not active. Detatch interrupts for the shoot button, listen for game requests
@@ -256,12 +265,12 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
 
   pinMode(REQ_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
+  //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
 
   // Start advertising so other ESPs can find us
   BLEAdvertising *pAdvertising = pServer->getAdvertising();
   pAdvertising->start();
-  attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+  //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
 
   pinMode(IR_RECV, INPUT);
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
