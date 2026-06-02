@@ -25,7 +25,6 @@
 // System state
 volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
-volatile bool shoot_pressed = false;
 volatile bool req_pressed = false;
 volatile bool hitDetected = false;
 
@@ -80,10 +79,6 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
 void pairISR() {
   pair_pressed = true;
-}
-
-void shootISR() {
-  shoot_pressed = true;
 }
 
 void reqISR() {
@@ -153,7 +148,12 @@ void handleGameState(void *p) {
   }
 }
 
+// Handle setting the LED states
 void ledHandler(void *p) {
+  static bool pair_led_state = LOW;
+  static bool game_led_state = LOW;
+  static bool alive_led_state = HIGH;
+  // dont need to track dead led since it is the opposite of alive
   while(true) {
     switch(currentState) {
       // Blue: off normally, blinking if pairing flag set
@@ -161,28 +161,68 @@ void ledHandler(void *p) {
       // Green: off 
       // Red: off
       case UNPAIRED: {
-
+        game_led_state = LOW;
+        digitalWrite(GAME_STATUS_LED, game_led_state);
+        alive_led_state = LOW;
+        digitalWrite(ALIVE_STATUS_LED, alive_led_state);
+        digitalWrite(DEAD_STATUS_LED, LOW);
+        if (pair_led_state) {
+          pair_led_state = !pair_led_state;
+          digitalWrite(PAIR_STATUS_LED, pair_led_state);
+        } else {
+          pair_led_state = LOW;
+          digitalWrite(PAIR_STATUS_LED, pair_led_state);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        break;
       }
       // Blue: solid on
       // Yellow: off
       // Green: retain last state
       // Red: opposite of Green
       case GAME_OVER: {
-
+        pair_led_state = HIGH;
+        digitalWrite(PAIR_STATUS_LED, pair_led_state);
+        game_led_state = LOW;
+        digitalWrite(GAME_STATUS_LED, game_led_state);
+        digitalWrite(ALIVE_STATUS_LED, alive_led_state);
+        digitalWrite(DEAD_STATUS_LED, !alive_led_state);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        break;
       }
       // Blue: solid on
       // Yellow: blinking
       // Green: retain last state
       // Red: opposite of green
       case REQUEST_GAME: {
-
+        pair_led_state = HIGH;
+        digitalWrite(PAIR_STATUS_LED, pair_led_state);
+        digitalWrite(ALIVE_STATUS_LED, alive_led_state);
+        digitalWrite(DEAD_STATUS_LED, !alive_led_state);
+        if (game_led_state) {
+          game_led_state = !game_led_state;
+          digitalWrite(GAME_STATUS_LED, game_led_state);
+        } else {
+          game_led_state = LOW;
+          digitalWrite(GAME_STATUS_LED, game_led_state);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        break;
       }
       // Blue: solid on
       // Yellow: solid on
       // Green: solid on if no hit is detected, off if hit detected
       // Red: opposite of green
       case GAME_ACTIVE: {
-
+        game_led_state = HIGH;
+        digitalWrite(GAME_STATUS_LED, game_led_state);
+        pair_led_state = HIGH;
+        digitalWrite(PAIR_STATUS_LED,pair_led_state);
+        alive_led_state = hitDetected;
+        digitalWrite(ALIVE_STATUS_LED, alive_led_state);
+        digitalWrite(DEAD_STATUS_LED, !alive_led_state);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        break;
       }
     }
   }
@@ -215,9 +255,6 @@ void setup() {
   pinMode(PAIR_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
 
-  pinMode(SHOOT_BUTTON, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(SHOOT_BUTTON), shootISR, FALLING);
-
   pinMode(REQ_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
 
@@ -232,4 +269,11 @@ void setup() {
 }
 
 // Empty in FreeRTOS
-void loop() {}
+void loop() {
+  /*
+  Serial.println("Hit Status: " + String(hitDetected));
+  Serial.println("Pair Pressed: " + String(pair_pressed));
+  Serial.println("Request Pressed: " + String(req_pressed));
+  delay(1000);
+  */
+}
