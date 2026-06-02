@@ -27,6 +27,8 @@ volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
 volatile bool req_pressed = false;
 volatile bool hitDetected = false;
+volatile bool connectedToServer = false;
+volatile bool isRequestor = false;
 
 // Current state of the game
 // Unpaired: not currently paired to another ESP32, waiting for a connection
@@ -52,30 +54,39 @@ typedef enum BLEMessage {
   GAME_OVER_MSG
 } BLEMessage;
 
-// Client connection variables
-bool isClient = false;
-bool connectedToServer = false;
-bool isRequestor = false; // Whether or not THIS esp32 requested the game, or if the opponent did
+// Global BLE Variables
+BLEServer* pServer = nullptr;
+BLEAdvertising* pAdvertising = nullptr;
+BLEClient* pClient = nullptr;
 BLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
-BLEAdvertisedDevice* targetDevice = nullptr;
+BLECharacteristic* pLocalCharacteristic = nullptr;
 
-class MyServerCallbacks: public BLECharacteristicCallbacks {
-   void onWrite(BLECharacteristic *pCharacteristic) {
-     // This fires on the SERVER esp when the CLIENT esp sends a message
-     BLE_tripped = true;    
-   }
-};
-
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-  void onResult(BLEAdvertisedDevice advertisedDevice) {
-    // Look for a device advertising our exact game Service UUID
-    if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
-      BLEDevice::getScan()->stop(); // Found it! Stop looking.
-      targetDevice = new BLEAdvertisedDevice(advertisedDevice);
-      isClient = true; // Flag to execute connection in the loop
+// Server callback to track when a Central client connects to us
+class ServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+        connectedToServer = true;
     }
-  }
+    void onDisconnect(BLEServer* pServer) {
+        connectedToServer = false;
+    }
 };
+
+// Client callback tracking when we find our target peripheral device
+class AdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice advertisedDevice) {
+        if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
+            BLEDevice::getScan()->stop();
+            // Store target device information pointer
+            pServerAddress = new BLEAddress(advertisedDevice.getAddress());
+            foundTargetDevice = true;
+        }
+    }
+public:
+    static BLEAddress* pServerAddress;
+    static bool foundTargetDevice;
+};
+BLEAddress* AdvertisedDeviceCallbacks::pServerAddress = nullptr;
+bool AdvertisedDeviceCallbacks::foundTargetDevice = false;
 
 void pairISR() {
   pair_pressed = true;
@@ -92,91 +103,88 @@ void IRAM_ATTR ir_isr() {
   detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
-// Helper function for Client Connection
-bool connectToServer() {
-  BLEClient* pClient = BLEDevice::createClient();
-  if (!pClient->connect(targetDevice)) return false;
-
-  BLERemoteService* pRemoteService = pClient->getService(BLEUUID(SERVICE_UUID));
-  if (pRemoteService == nullptr) return false;
-
-  pRemoteCharacteristic = pRemoteService->getCharacteristic(BLEUUID(CHARACTERISTIC_UUID));
-  if (pRemoteCharacteristic == nullptr) return false;
-
-  return true;
-}
-
 // TASK FUNCTIONS
 void pairDevices(void* p) {
-  bool isScanning = false;
-  BLEScan* pBLEScan = nullptr;
+  // 1. Initial State: Boot up in Peripheral (Server) Mode
+  BLEDevice::init("LaserTag_Node");
+  
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
+  
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pLocalCharacteristic = pService->createCharacteristic(
+                           CHARACTERISTIC_UUID,
+                           BLECharacteristic::PROPERTY_READ |
+                           BLECharacteristic::PROPERTY_WRITE |
+                           BLECharacteristic::PROPERTY_NOTIFY
+                         );
+  pService->start();
+  
+  pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
 
-  while (true) {
-    // Check if we are currently UNPAIRED and the pairing process was initiated
-    if (currentState == UNPAIRED && pair_pressed) {
+  while (currentState == UNPAIRED) {
+    
+    // IF PAIR BUTTON PRESSED -> Drop Server Mode, Switch to Central (Client)
+    if (pair_pressed) {
+      Serial.println("Pair button pressed! Switching to Central (Client) role...");
       
-      // If we haven't found a target server yet, but we aren't scanning yet so start scanning
-      if (!isClient && !connectedToServer && !isScanning) {
-        Serial.println("[Pairing] Button pressed. Starting BLE scan for opponent...");
-        
-        pBLEScan = BLEDevice::getScan();
-        pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-        pBLEScan->setInterval(1349); // How often we restart a scan 
-        pBLEScan->setWindow(449); // How long we are listening in a given cycle
-        pBLEScan->setActiveScan(true);
-        
-        pBLEScan->start(4, false); // Start an asynchronous scan for 4 seconds
-        isScanning = true;
+      // Stop acting like a peripheral
+      if (pAdvertising != nullptr) {
+        pAdvertising->stop();
+      }
+      
+      // Setup as Central Client
+      pClient = BLEDevice::createClient();
+      BLEScan* pBLEScan = BLEDevice::getScan();
+      pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+      pBLEScan->setInterval(1349);
+      pBLEScan->setWindow(449);
+      pBLEScan->setActiveScan(true);
+
+      Serial.println("Scanning for peer...");
+      while (!AdvertisedDeviceCallbacks::foundTargetDevice) {
+        pBLEScan->start(5, false);
+        vTaskDelay(pdMS_TO_TICKS(100));
       }
 
-      // The MyAdvertisedDeviceCallbacks will flip 'isClient' to true if it discovers the service
-      if (isClient && !connectedToServer) {
-        Serial.println("[Pairing] Opponent spotted! Attempting connection...");
-        isScanning = false; // Scan automatically stops in your callback
-
-        if (connectToServer()) {
-          Serial.println("[Pairing] Client successfully connected to Opponent's Server!");
-          connectedToServer = true;
-          
-          // Stop advertising server since we successfully paired as a client
-          BLEDevice::getAdvertising()->stop(); 
-
-          // Transition state out of UNPAIRED
-          detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
-          pair_pressed = false; 
-          currentState = GAME_OVER; 
-        } else {
-          Serial.println("[Pairing] Connection failed. Retrying scan...");
-          isClient = false; // Reset to try scanning again
+      Serial.println("Peer found! Initiating connection...");
+      if (pClient->connect(*AdvertisedDeviceCallbacks::pServerAddress)) {
+        BLERemoteService* pRemoteService = pClient->getService(SERVICE_UUID);
+        if (pRemoteService != nullptr) {
+          pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
+          if (pRemoteCharacteristic != nullptr) {
+            connectedToServer = true;
+            isRequestor = true; // This device took the initiative
+            Serial.println("Connected successfully as Central!");
+          }
         }
       }
       
-      // If the scan timed out and didn't find anything, allow it to retry
-      // if (isScanning && !isClient) {
-      //    // Tiny delay to check if background scan finished
-      //    vTaskDelay(pdMS_TO_TICKS(100)); 
-      // }
-
-    } else if (currentState == UNPAIRED && !pair_pressed) {
-      // The button hasn't been pressed yet
-      vTaskDelay(pdMS_TO_TICKS(100));
-    } else {
-      // If we are no longer UNPAIRED, we have successfully paired (or the other ESP connected to us)
-      if (currentState != UNPAIRED) {
-        Serial.println("[Pairing] Pairing successful! Now killing pairing task.");
-        
-        // Ensure the pairing button interrupt is completely detached
-        detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
-        pair_pressed = false;
-
-        // Pairing only happens once per device game cycle
-        vTaskDelete(NULL); 
+      if (!connectedToServer) {
+        Serial.println("Connection failed. Re-initiating scan...");
+        AdvertisedDeviceCallbacks::foundTargetDevice = false;
+      }
+    } 
+    // IF PAIR BUTTON NOT PRESSED -> Retain Peripheral Status & Wait
+    else {
+      // Server connection is passively captured inside the ServerCallbacks class context
+      if (connectedToServer) {
+         Serial.println("Connected successfully as Peripheral/Server!");
+         isRequestor = false;
       }
     }
-    
-    // Crucial for FreeRTOS: yield control to let lower-priority tasks run
-    vTaskDelay(pdMS_TO_TICKS(50)); 
+
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
+
+  // Self suspend if we transition out of UNPAIRED state
+  Serial.println("Device Paired! Suspending pairing task.");
+  vTaskSuspend(NULL);
 }
 
 void handleGameState(void *p) {
@@ -314,18 +322,6 @@ void setup() {
   pinMode(DEAD_STATUS_LED, OUTPUT);
   digitalWrite(ALIVE_STATUS_LED, HIGH); // Default to alive
 
-  BLEDevice::init("GameESP32");
-  BLEServer *pServer = BLEDevice::createServer();
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
-                                         CHARACTERISTIC_UUID,
-                                         BLECharacteristic::PROPERTY_READ |
-                                         BLECharacteristic::PROPERTY_WRITE
-                                       );
-
-  pCharacteristic->setCallbacks(new MyServerCallbacks());
-  pService->start();
-
   // Set button pins as inputs and attach interrupts
   pinMode(PAIR_BUTTON, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PAIR_BUTTON), pairISR, FALLING);
@@ -333,14 +329,13 @@ void setup() {
   pinMode(REQ_BUTTON, INPUT_PULLUP);
   //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);\
 
-  // Start advertising so other ESPs can find us
-  BLEAdvertising *pAdvertising = pServer->getAdvertising();
-  pAdvertising->start();
   //attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
 
   pinMode(IR_RECV, INPUT);
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
   
+  xTaskCreatePinnedToCore(pairDevices, "Pairing Task", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(ledHandler, "LED Task", 4096, NULL, 1, NULL, 1);
 }
 
 // Empty in FreeRTOS
