@@ -108,8 +108,74 @@ bool connectToServer() {
 
 // TASK FUNCTIONS
 void pairDevices(void* p) {
-  while (true) {
+  bool isScanning = false;
+  BLEScan* pBLEScan = nullptr;
 
+  while (true) {
+    // Check if we are currently UNPAIRED and the pairing process was initiated
+    if (currentState == UNPAIRED && pair_pressed) {
+      
+      // If we haven't found a target server yet, but we aren't scanning yet so start scanning
+      if (!isClient && !connectedToServer && !isScanning) {
+        Serial.println("[Pairing] Button pressed. Starting BLE scan for opponent...");
+        
+        pBLEScan = BLEDevice::getScan();
+        pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+        pBLEScan->setInterval(1349); // How often we restart a scan 
+        pBLEScan->setWindow(449); // How long we are listening in a given cycle
+        pBLEScan->setActiveScan(true);
+        
+        pBLEScan->start(4, false); // Start an asynchronous scan for 4 seconds
+        isScanning = true;
+      }
+
+      // The MyAdvertisedDeviceCallbacks will flip 'isClient' to true if it discovers the service
+      if (isClient && !connectedToServer) {
+        Serial.println("[Pairing] Opponent spotted! Attempting connection...");
+        isScanning = false; // Scan automatically stops in your callback
+
+        if (connectToServer()) {
+          Serial.println("[Pairing] Client successfully connected to Opponent's Server!");
+          connectedToServer = true;
+          
+          // Stop advertising server since we successfully paired as a client
+          BLEDevice::getAdvertising()->stop(); 
+
+          // Transition state out of UNPAIRED
+          detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
+          pair_pressed = false; 
+          currentState = GAME_OVER; 
+        } else {
+          Serial.println("[Pairing] Connection failed. Retrying scan...");
+          isClient = false; // Reset to try scanning again
+        }
+      }
+      
+      // If the scan timed out and didn't find anything, allow it to retry
+      // if (isScanning && !isClient) {
+      //    // Tiny delay to check if background scan finished
+      //    vTaskDelay(pdMS_TO_TICKS(100)); 
+      // }
+
+    } else if (currentState == UNPAIRED && !pair_pressed) {
+      // The button hasn't been pressed yet
+      vTaskDelay(pdMS_TO_TICKS(100));
+    } else {
+      // If we are no longer UNPAIRED, we have successfully paired (or the other ESP connected to us)
+      if (currentState != UNPAIRED) {
+        Serial.println("[Pairing] Pairing successful! Now killing pairing task.");
+        
+        // Ensure the pairing button interrupt is completely detached
+        detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
+        pair_pressed = false;
+
+        // Pairing only happens once per device game cycle
+        vTaskDelete(NULL); 
+      }
+    }
+    
+    // Crucial for FreeRTOS: yield control to let lower-priority tasks run
+    vTaskDelay(pdMS_TO_TICKS(50)); 
   }
 }
 
@@ -166,7 +232,7 @@ void ledHandler(void *p) {
         alive_led_state = LOW;
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, LOW);
-        if (pair_led_state) {
+        if (pair_pressed) {
           pair_led_state = !pair_led_state;
           digitalWrite(PAIR_STATUS_LED, pair_led_state);
         } else {
