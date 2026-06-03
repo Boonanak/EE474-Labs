@@ -302,11 +302,12 @@ void handleGameState(void *p) {
       // when moving, detatch interrupt for pair button
       case UNPAIRED: {
         if (pairingComplete()) {
-          currentState = GAME_OVER;
           pair_pressed = false;
           req_pressed = false;
           detachInterrupt(digitalPinToInterrupt(PAIR_BUTTON));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+          vTaskDelay(pdMS_TO_TICKS(500));
+          currentState = GAME_OVER;
         } else {
           currentState = UNPAIRED;
         }
@@ -319,13 +320,15 @@ void handleGameState(void *p) {
       case GAME_OVER: {
         static BLEMessage msg;
         if (req_pressed) {
+          sendMessage(REQUEST_GAME_MSG);
           isRequestor = true;
-          currentState = REQUEST_GAME;
           detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
-          sendMessage(REQUEST_GAME_MSG); 
+          vTaskDelay(pdMS_TO_TICKS(500));
+          currentState = REQUEST_GAME;
         } else if (getReceivedMessage(msg) && msg == REQUEST_GAME_MSG) {
           msg = NOT_A_MSG;
           isRequestor = false;
+          vTaskDelay(pdMS_TO_TICKS(500));
           currentState = REQUEST_GAME;
         } else {
           currentState = GAME_OVER;
@@ -343,17 +346,19 @@ void handleGameState(void *p) {
           if (getReceivedMessage(msg) && msg == GAME_ACCEPTED_MSG) {
             msg = NOT_A_MSG;
             vTaskDelay(pdMS_TO_TICKS(3000));
-            currentState = GAME_ACTIVE;
             attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            currentState = GAME_ACTIVE;
           }
         } else {
           if (req_pressed) {
             sendMessage(GAME_ACCEPTED_MSG);
             vTaskDelay(pdMS_TO_TICKS(3200));
-            currentState = GAME_ACTIVE;
             req_pressed = false;
             detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
             attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            currentState = GAME_ACTIVE;
           }
         }
         break;
@@ -364,17 +369,20 @@ void handleGameState(void *p) {
       // when transitioning, detatch interrupt for hit detection, and attach game button interrupt
       case GAME_ACTIVE: {
         static BLEMessage msg;
+        req_pressed = false;
         if (hitDetected) {
           sendMessage(GAME_OVER_MSG);
           hitDetected = false;
-          currentState = GAME_OVER;
           detachInterrupt(digitalPinToInterrupt(IR_RECV));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+          vTaskDelay(pdMS_TO_TICKS(500));
+          currentState = GAME_OVER;
         } else if (getReceivedMessage(msg) && msg == GAME_OVER_MSG) {
           msg = NOT_A_MSG;
-          currentState = GAME_OVER;
           detachInterrupt(digitalPinToInterrupt(IR_RECV));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
+          vTaskDelay(pdMS_TO_TICKS(500));
+          currentState = GAME_OVER;
         } else {
           currentState = GAME_ACTIVE;
         }
@@ -436,7 +444,7 @@ void ledHandler(void *p) {
         digitalWrite(PAIR_STATUS_LED, pair_led_state);
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, !alive_led_state);
-        if (req_pressed) {
+        if (req_pressed || (!isRequestor && messageAvailable && lastReceivedMessage == REQUEST_GAME_MSG)) {
           game_led_state = !game_led_state;
           digitalWrite(GAME_STATUS_LED, game_led_state);
         } else {
@@ -485,7 +493,7 @@ void setup() {
   pinMode(IR_RECV, INPUT);
   //attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
   xTaskCreatePinnedToCore(pairDevices, "Pairing Task", 4096, NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(ledHandler, "LED Task", 2048, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(ledHandler, "LED Task", 2048, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(handleGameState, "Game Task", 2048, NULL, 1, NULL, 1);
 }
 
