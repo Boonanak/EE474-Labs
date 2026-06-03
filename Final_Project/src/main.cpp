@@ -106,14 +106,19 @@ void IRAM_ATTR ir_isr() {
 
 void sendMessage(BLEMessage msg) {
   if (pRemoteCharacteristic != nullptr) {
-    pRemoteCharacteristic->setValue((uint8_t*)&msg, sizeof(msg));
-    pRemoteCharacteristic->notify();
+    pRemoteCharacteristic->writeValue((uint8_t*)&msg, sizeof(msg));
+    Serial.println("Message sent: " + String((char)msg));
+  } else {
+    Serial.println("Message Send Failure: No remote characteristic found");
   }
 }
 
 bool checkForRecievedMessages(BLEMessage msg) {
   if (pRemoteCharacteristic != nullptr) {
     std::string value = pRemoteCharacteristic->readValue();
+    if (value.length() > 0) {
+      Serial.println("Message recieved: " + String(value.c_str()));
+    }
     if (value.length() > 0 && value[0] == (char)msg) {
       return true;
     }
@@ -231,10 +236,10 @@ void handleGameState(void *p) {
         if (req_pressed) {
           isRequestor = true;
           currentState = REQUEST_GAME;
-          req_pressed = false;
           detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
           sendMessage(REQUEST_GAME_MSG); 
         } else if (checkForRecievedMessages(REQUEST_GAME_MSG)) {
+          
           isRequestor = false;
           currentState = REQUEST_GAME;
         } else {
