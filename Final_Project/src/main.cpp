@@ -23,11 +23,9 @@
 #define IR_RECV 10
 
 // System state
-volatile bool BLE_tripped = false; //communicate between esps
 volatile bool pair_pressed = false;
 volatile bool req_pressed = false;
 volatile bool hitDetected = false;
-volatile bool connectedToServer = false;
 volatile bool isRequestor = false;
 
 // Current state of the game
@@ -51,44 +49,83 @@ volatile GameState currentState = UNPAIRED;
 typedef enum BLEMessage {
   REQUEST_GAME_MSG,
   GAME_ACCEPTED_MSG,
-  GAME_OVER_MSG
+  GAME_OVER_MSG,
+  NOT_A_MSG
 } BLEMessage;
 
-// Global BLE Variables
+// Connection handles
 BLEServer* pServer = nullptr;
-BLEAdvertising* pAdvertising = nullptr;
 BLEClient* pClient = nullptr;
-BLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
-BLECharacteristic* pLocalCharacteristic = nullptr;
+BLECharacteristic* pLocalCharacteristic = nullptr;       // Our server characteristic
+BLERemoteCharacteristic* pRemoteCharacteristic = nullptr; // Peer’s characteristic
+
+// Status flags
+BLEAddress* peerAddress = nullptr;
+bool clientConnected = false;
+bool serverConnected = false;
+bool remoteCharacteristicReady = false;
+
+// Message buffer
+volatile BLEMessage lastReceivedMessage;
+volatile bool messageAvailable = false;
+
+// Tie breaking for connection
+volatile bool clientChosen = false;
+volatile bool iAmClient = false;
 
 // Server callback to track when a Central client connects to us
-class ServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-        connectedToServer = true;
+class ServerCallbacks : public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) override {
+        serverConnected = true;
+        Serial.println("Peer connected to our server");
     }
-    void onDisconnect(BLEServer* pServer) {
-        connectedToServer = false;
+
+    void onDisconnect(BLEServer* pServer) override {
+        serverConnected = false;
+        Serial.println("Peer disconnected from our server");
+        BLEDevice::startAdvertising();
+    }
+};
+
+// Client callback to track when we connect to a server and when notifications are received
+class AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+    void onResult(BLEAdvertisedDevice device) override {
+        if (device.haveServiceUUID() &&
+            device.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
+
+            Serial.println("Found peer device!");
+            peerAddress = new BLEAddress(device.getAddress());
+            BLEDevice::getScan()->stop();
+        }
+    }
+};
+
+class ServerCharacteristicCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic* characteristic) override {
+        std::string value = characteristic->getValue();
+        if (value.length() >= 1) {
+            lastReceivedMessage = (BLEMessage)value[0];
+            messageAvailable = true;
+            Serial.printf("Server received message: %d\n", lastReceivedMessage);
+        }
     }
 };
 
 // Client callback tracking when we find our target peripheral device
-class AdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) {
-        if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
-            BLEDevice::getScan()->stop();
-            // Store target device information pointer
-            pServerAddress = new BLEAddress(advertisedDevice.getAddress());
-            foundTargetDevice = true;
-            Serial.println("Message recieved!");
-        }
+static void notifyCallback(
+    BLERemoteCharacteristic* characteristic,
+    uint8_t* data,
+    size_t length,
+    bool isNotify)
+{
+    if (length >= 1) {
+        lastReceivedMessage = (BLEMessage)data[0];
+        messageAvailable = true;
+        Serial.printf("Received message via notify: %d\n", lastReceivedMessage);
     }
-public:
-    static BLEAddress* pServerAddress;
-    static bool foundTargetDevice;
-};
-BLEAddress* AdvertisedDeviceCallbacks::pServerAddress = nullptr;
-bool AdvertisedDeviceCallbacks::foundTargetDevice = false;
+}
 
+// ISRs for the two buttons
 void pairISR() {
   pair_pressed = true;
 }
@@ -104,110 +141,157 @@ void IRAM_ATTR ir_isr() {
   detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
+// Sends a message as the client to the sever
 void sendMessage(BLEMessage msg) {
-  if (pRemoteCharacteristic != nullptr) {
-    pRemoteCharacteristic->writeValue((uint8_t*)&msg, sizeof(msg));
-    Serial.println("Message sent: " + String((char)msg));
-  } else {
-    Serial.println("Message Send Failure: No remote characteristic found");
-  }
+    uint8_t data = (uint8_t)msg;
+
+    // CLIENT → write to server characteristic
+    if (iAmClient && remoteCharacteristicReady && pRemoteCharacteristic != nullptr) {
+        pRemoteCharacteristic->writeValue(&data, 1, true);
+        Serial.printf("Client sent message: %d\n", msg);
+        return;
+    }
+
+    // SERVER → notify client
+    if (!iAmClient && pLocalCharacteristic != nullptr) {
+        pLocalCharacteristic->setValue(&data, 1);
+        pLocalCharacteristic->notify();
+        Serial.printf("Server sent message: %d\n", msg);
+        return;
+    }
+
+    Serial.println("sendMessage() failed: no valid BLE path");
 }
 
-bool checkForRecievedMessages(BLEMessage msg) {
-  if (pRemoteCharacteristic != nullptr) {
-    std::string value = pRemoteCharacteristic->readValue();
-    if (value.length() > 0) {
-      Serial.println("Message recieved: " + String(value.c_str()));
-    }
-    if (value.length() > 0 && value[0] == (char)msg) {
-      return true;
-    }
-  }
-  return false;
+
+// Checks if a received messages matches msgOut
+bool getReceivedMessage(BLEMessage &msgOut) {
+    if (!messageAvailable)
+        return false;
+
+    msgOut = lastReceivedMessage;
+    messageAvailable = false;
+    return true;
 }
 
-// TASK FUNCTIONS
+// Pair both devices together, pair buttons must be pressed by both 
+// players in order to begin pairing
 void pairDevices(void* p) {
-  // 1. Initial State: Boot up in Peripheral (Server) Mode
-  BLEDevice::init("LaserTag_Node");
-  
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new ServerCallbacks());
-  
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-  pLocalCharacteristic = pService->createCharacteristic(
-                           CHARACTERISTIC_UUID,
-                           BLECharacteristic::PROPERTY_READ |
-                           BLECharacteristic::PROPERTY_WRITE |
-                           BLECharacteristic::PROPERTY_NOTIFY
-                         );
-  pService->start();
-  
-  pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
 
-  while (currentState == UNPAIRED) {
-    
-    // IF PAIR BUTTON PRESSED -> Drop Server Mode, Switch to Central (Client)
-    if (pair_pressed) {
-      Serial.println("Pair button pressed! Switching to Central (Client) role...");
-      
-      // Stop acting like a peripheral
-      if (pAdvertising != nullptr) {
-        pAdvertising->stop();
-      }
-      
-      // Setup as Central Client
-      pClient = BLEDevice::createClient();
-      BLEScan* pBLEScan = BLEDevice::getScan();
-      pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
-      pBLEScan->setInterval(1349);
-      pBLEScan->setWindow(449);
-      pBLEScan->setActiveScan(true);
+    Serial.println("Waiting for pair button...");
 
-      Serial.println("Scanning for peer...");
-      while (!AdvertisedDeviceCallbacks::foundTargetDevice) {
-        pBLEScan->start(5, false);
-        vTaskDelay(pdMS_TO_TICKS(100));
-      }
-
-      Serial.println("Peer found! Initiating connection...");
-      if (pClient->connect(*AdvertisedDeviceCallbacks::pServerAddress)) {
-        BLERemoteService* pRemoteService = pClient->getService(SERVICE_UUID);
-        if (pRemoteService != nullptr) {
-          pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
-          if (pRemoteCharacteristic != nullptr) {
-            connectedToServer = true;
-            isRequestor = true; // This device took the initiative
-            Serial.println("Connected successfully as Central!");
-          }
-        }
-      }
-      
-      if (!connectedToServer) {
-        Serial.println("Connection failed. Re-initiating scan...");
-        AdvertisedDeviceCallbacks::foundTargetDevice = false;
-      }
-    } 
-    // IF PAIR BUTTON NOT PRESSED -> Retain Peripheral Status & Wait
-    else {
-      // Server connection is passively captured inside the ServerCallbacks class context
-      if (connectedToServer) {
-         Serial.println("Connected successfully as Peripheral/Server!");
-         isRequestor = false;
-      }
+    // Wait for THIS device to press the pair button
+    while (!pair_pressed) {
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
+    Serial.println("Pair button pressed. Starting BLE...");
 
-  // Self suspend if we transition out of UNPAIRED state
-  Serial.println("Device Paired! Suspending pairing task.");
-  vTaskSuspend(NULL);
+    BLEDevice::init("LaserTag_Node");
+
+    // --------------------------
+    // 1. Start BLE Server
+    // --------------------------
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new ServerCallbacks());
+
+    BLEService* pService = pServer->createService(SERVICE_UUID);
+
+    pLocalCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ |
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pLocalCharacteristic->setCallbacks(new ServerCharacteristicCallbacks());
+
+    pService->start();
+
+    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    BLEDevice::startAdvertising();
+
+    Serial.println("Server started, advertising...");
+
+    // --------------------------
+    // 2. Scan for peer
+    // --------------------------
+    BLEScan* scan = BLEDevice::getScan();
+    scan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
+    scan->setActiveScan(true);
+
+    Serial.println("Scanning for peer...");
+
+    while (peerAddress == nullptr) {
+        scan->start(3, false);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    Serial.print("Found peer: ");
+    Serial.println(peerAddress->toString().c_str());
+
+    // --------------------------
+    // 3. MAC ADDRESS TIE-BREAKER
+    // --------------------------
+    String myMac = BLEDevice::getAddress().toString().c_str();
+    String peerMac = peerAddress->toString().c_str();
+
+    // Lower MAC becomes the client
+    iAmClient = (myMac < peerMac);
+
+    Serial.printf("My MAC:   %s\n", myMac.c_str());
+    Serial.printf("Peer MAC: %s\n", peerMac.c_str());
+    Serial.printf("I am the %s\n", iAmClient ? "CLIENT" : "SERVER");
+
+    // --------------------------
+    // 4. SERVER-ONLY DEVICE
+    // --------------------------
+    if (!iAmClient) {
+        Serial.println("Waiting for client to connect...");
+        while (!serverConnected) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        Serial.println("Client connected!");
+        remoteCharacteristicReady = false;
+        vTaskSuspend(NULL);
+    }
+
+    // --------------------------
+    // 5. CLIENT DEVICE
+    // --------------------------
+    Serial.println("Connecting as client...");
+
+    pClient = BLEDevice::createClient();
+    if (!pClient->connect(*peerAddress)) {
+        Serial.println("Client connection failed");
+        vTaskDelete(NULL);
+    }
+
+    clientConnected = true;
+
+    BLERemoteService* remoteService = pClient->getService(SERVICE_UUID);
+    pRemoteCharacteristic = remoteService->getCharacteristic(CHARACTERISTIC_UUID);
+
+    if (pRemoteCharacteristic->canNotify()) {
+        pRemoteCharacteristic->registerForNotify(notifyCallback);
+    }
+
+    remoteCharacteristicReady = true;
+
+    Serial.println("Pairing complete!");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskSuspend(NULL);
+}
+
+
+bool pairingComplete() {
+    if (iAmClient) {
+        // Client needs full connection
+        return serverConnected && clientConnected && remoteCharacteristicReady;
+    } else {
+        // Server only needs the client to connect
+        return serverConnected;
+    }
 }
 
 void handleGameState(void *p) {
@@ -217,7 +301,7 @@ void handleGameState(void *p) {
       // an opponent. Once that is complete we move to GAME_OVER 
       // when moving, detatch interrupt for pair button
       case UNPAIRED: {
-        if (connectedToServer) {
+        if (pairingComplete()) {
           currentState = GAME_OVER;
           pair_pressed = false;
           req_pressed = false;
@@ -233,13 +317,14 @@ void handleGameState(void *p) {
       // If a game request is sent OR recieved, move to request game
       // if this ESP32 is the requestor, set the isRequestor flag
       case GAME_OVER: {
+        static BLEMessage msg;
         if (req_pressed) {
           isRequestor = true;
           currentState = REQUEST_GAME;
           detachInterrupt(digitalPinToInterrupt(REQ_BUTTON));
           sendMessage(REQUEST_GAME_MSG); 
-        } else if (checkForRecievedMessages(REQUEST_GAME_MSG)) {
-          
+        } else if (getReceivedMessage(msg) && msg == REQUEST_GAME_MSG) {
+          msg = NOT_A_MSG;
           isRequestor = false;
           currentState = REQUEST_GAME;
         } else {
@@ -253,8 +338,10 @@ void handleGameState(void *p) {
       // active in 3.2 seconds
       // When transitioning, detach interrupts for game button, attach interrupt for hit detection
       case REQUEST_GAME: {
+        static BLEMessage msg;
         if (isRequestor) {
-          if (checkForRecievedMessages(GAME_ACCEPTED_MSG)) {
+          if (getReceivedMessage(msg) && msg == GAME_ACCEPTED_MSG) {
+            msg = NOT_A_MSG;
             vTaskDelay(pdMS_TO_TICKS(3000));
             currentState = GAME_ACTIVE;
             attachInterrupt(digitalPinToInterrupt(IR_RECV), ir_isr, FALLING);
@@ -276,13 +363,15 @@ void handleGameState(void *p) {
       // if a GAME_OVER_MSG is detected, move to GAME_OVER
       // when transitioning, detatch interrupt for hit detection, and attach game button interrupt
       case GAME_ACTIVE: {
+        static BLEMessage msg;
         if (hitDetected) {
           sendMessage(GAME_OVER_MSG);
           hitDetected = false;
           currentState = GAME_OVER;
           detachInterrupt(digitalPinToInterrupt(IR_RECV));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
-        } else if (checkForRecievedMessages(GAME_OVER_MSG)) {
+        } else if (getReceivedMessage(msg) && msg == GAME_OVER_MSG) {
+          msg = NOT_A_MSG;
           currentState = GAME_OVER;
           detachInterrupt(digitalPinToInterrupt(IR_RECV));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
@@ -366,7 +455,7 @@ void ledHandler(void *p) {
         digitalWrite(GAME_STATUS_LED, game_led_state);
         pair_led_state = HIGH;
         digitalWrite(PAIR_STATUS_LED,pair_led_state);
-        alive_led_state = hitDetected;
+        alive_led_state = !hitDetected;
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, !alive_led_state);
         vTaskDelay(pdMS_TO_TICKS(250));
