@@ -24,7 +24,7 @@ volatile bool req_pressed = false;
 volatile bool hitDetected = false;
 bool peerRegistered = false;
 
-// Broadcast MAC address (sends to any listening ESP-NOW node nearby)
+// Broadcast MAC address (updated later in pair task from peerInfo struct)
 uint8_t peerMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 typedef enum GameState {
@@ -64,7 +64,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   }
 }
 
-// 1. SIMPLE SEND
 void sendMessage(BLEMessage msg) {
   uint8_t payload = (uint8_t)msg;
   esp_err_t result = esp_now_send(peerMac, &payload, 1);
@@ -75,7 +74,6 @@ void sendMessage(BLEMessage msg) {
   }
 }
 
-// 2. SIMPLE RECEIVE CHECK
 bool checkForReceivedMessages(BLEMessage msg) {
   if (lastReceivedMessage == (int)msg) {
     lastReceivedMessage = -1; // Consume it
@@ -84,7 +82,6 @@ bool checkForReceivedMessages(BLEMessage msg) {
   return false;
 }
 
-// 3. PAIRING TASK
 void pairDevices(void* p) {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
@@ -237,7 +234,7 @@ void ledHandler(void *p) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   pinMode(PAIR_STATUS_LED, OUTPUT);
   pinMode(GAME_STATUS_LED, OUTPUT);
