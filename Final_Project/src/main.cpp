@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <FreeRTOS.h>
 #include <task.h>
-#include "BluetoothSerial.h" // Much simpler library than BLE
+#include "BluetoothSerial.h"
 
 // Buttons
 #define PAIR_BUTTON 3
@@ -47,7 +47,6 @@ void IRAM_ATTR ir_isr() {
   detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
-// 1. SIMPLE SEND
 void sendMessage(BLEMessage msg) {
   if (connected) {
     SerialBT.write((uint8_t)msg);
@@ -55,7 +54,6 @@ void sendMessage(BLEMessage msg) {
   }
 }
 
-// 2. SIMPLE, NON-BLOCKING RECEIVE
 bool checkForReceivedMessages(BLEMessage msg) {
   if (SerialBT.available()) {
     char incoming = SerialBT.peek(); // Look at the byte without removing it yet
@@ -68,7 +66,6 @@ bool checkForReceivedMessages(BLEMessage msg) {
   return false;
 }
 
-// 3. SIMPLE PAIRING TASK
 void pairDevices(void* p) {
   SerialBT.begin("LaserTag", true); // Boot as master/slave symmetrically
   
