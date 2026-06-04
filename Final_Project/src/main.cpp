@@ -372,10 +372,10 @@ void handleGameState(void *p) {
         req_pressed = false;
         if (hitDetected) {
           sendMessage(GAME_OVER_MSG);
-          hitDetected = false;
           detachInterrupt(digitalPinToInterrupt(IR_RECV));
           attachInterrupt(digitalPinToInterrupt(REQ_BUTTON), reqISR, FALLING);
           vTaskDelay(pdMS_TO_TICKS(500));
+          hitDetected = false;
           currentState = GAME_OVER;
         } else if (getReceivedMessage(msg) && msg == GAME_OVER_MSG) {
           msg = NOT_A_MSG;
@@ -444,7 +444,7 @@ void ledHandler(void *p) {
         digitalWrite(PAIR_STATUS_LED, pair_led_state);
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, !alive_led_state);
-        if (req_pressed || (!isRequestor && messageAvailable && lastReceivedMessage == REQUEST_GAME_MSG)) {
+        if (req_pressed || (!isRequestor && lastReceivedMessage == REQUEST_GAME_MSG)) {
           game_led_state = !game_led_state;
           digitalWrite(GAME_STATUS_LED, game_led_state);
         } else {
@@ -466,7 +466,7 @@ void ledHandler(void *p) {
         alive_led_state = !hitDetected;
         digitalWrite(ALIVE_STATUS_LED, alive_led_state);
         digitalWrite(DEAD_STATUS_LED, !alive_led_state);
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(50));
         break;
       }
     }
