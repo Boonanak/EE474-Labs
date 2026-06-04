@@ -1,3 +1,14 @@
+/**
+ * @file main.cpp
+ * @author Vance Borus and Sean Bubernak
+ * @brief Implementation of a laser tag game using IR Leds and two ESP32s communicating over BLE
+ * @version 1.0
+ * @date 2026-06-04
+ * 
+ * @copyright Copyright (c) 2026
+ * 
+ */
+
 #include <Arduino.h>
 #include <FreeRTOS.h>
 #include <task.h>
@@ -73,7 +84,10 @@ volatile bool messageAvailable = false;
 volatile bool clientChosen = false;
 volatile bool iAmClient = false;
 
-// Server callback to track when a Central client connects to us
+/**
+ * @brief Server callback to track when a Central client connects to us
+ * 
+ */
 class ServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
         serverConnected = true;
@@ -87,7 +101,10 @@ class ServerCallbacks : public BLEServerCallbacks {
     }
 };
 
-// Client callback to track when we connect to a server and when notifications are received
+/**
+ * @brief Client callback to track when we connect to a server and when notifications are received
+ * 
+ */
 class AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice device) override {
         if (device.haveServiceUUID() &&
@@ -100,6 +117,10 @@ class AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     }
 };
 
+/**
+ * @brief Server characteristic callback to track when we receive messages from the client
+ * 
+ */
 class ServerCharacteristicCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* characteristic) override {
         std::string value = characteristic->getValue();
@@ -111,13 +132,15 @@ class ServerCharacteristicCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-// Client callback tracking when we find our target peripheral device
-static void notifyCallback(
-    BLERemoteCharacteristic* characteristic,
-    uint8_t* data,
-    size_t length,
-    bool isNotify)
-{
+/**
+ * @brief Client callback tracking when we find our target peripheral device
+ * 
+ * @param characteristic The characteristic that is the source of the event
+ * @param data pointer to the data received
+ * @param length number of bytes received
+ * @param isNotify unused
+ */
+static void notifyCallback(BLERemoteCharacteristic* characteristic, uint8_t* data, size_t length, bool isNotify) {
     if (length >= 1) {
         lastReceivedMessage = (BLEMessage)data[0];
         messageAvailable = true;
@@ -125,23 +148,37 @@ static void notifyCallback(
     }
 }
 
-// ISRs for the two buttons
+/**
+ * @brief ISR for the pair button, sets the pair_pressed flag
+ * 
+ */
 void pairISR() {
   pair_pressed = true;
 }
 
+/**
+ * @brief ISR for the game/request button, sets the req_pressed flag
+ * 
+ */
 void reqISR() {
   req_pressed = true;
 }
 
-// ISR for when the IR receiver detects a hit
-// Detaches itself to prevent multiple triggers
+/**
+ * @brief ISR for when the IR receiver detects a hit. Detaches itself to prevent multiple triggers
+ * 
+ */
 void IRAM_ATTR ir_isr() {
   hitDetected = true;
   detachInterrupt(digitalPinToInterrupt(IR_RECV));
 }
 
-// Sends a message as the client to the sever
+// 
+/**
+ * @brief Sends a message to the connected device, either as the client or the server
+ * 
+ * @param msg The message to be sent
+ */
 void sendMessage(BLEMessage msg) {
     uint8_t data = (uint8_t)msg;
 
@@ -164,7 +201,13 @@ void sendMessage(BLEMessage msg) {
 }
 
 
-// Checks if a received messages matches msgOut
+/**
+ * @brief Check if there is a message to receive
+ * 
+ * @param msgOut reference to a variable to store the received message in
+ * @return true if message was detected, stores message in msgOut
+ * @return false if no message was detected
+ */
 bool getReceivedMessage(BLEMessage &msgOut) {
     if (!messageAvailable)
         return false;
@@ -174,8 +217,11 @@ bool getReceivedMessage(BLEMessage &msgOut) {
     return true;
 }
 
-// Pair both devices together, pair buttons must be pressed by both 
-// players in order to begin pairing
+/**
+ * @brief Pair both devices together, pair buttons must be pressed by both players in order to begin pairing
+ * 
+ * @param p unused
+ */
 void pairDevices(void* p) {
 
     Serial.println("Waiting for pair button...");
@@ -283,7 +329,12 @@ void pairDevices(void* p) {
     vTaskSuspend(NULL);
 }
 
-
+/**
+ * @brief Check if pairing between the devices is complete. Different for client vs server
+ * 
+ * @return true if paired
+ * @return false if not paired
+ */
 bool pairingComplete() {
     if (iAmClient) {
         // Client needs full connection
@@ -294,6 +345,11 @@ bool pairingComplete() {
     }
 }
 
+/**
+ * @brief Task FSM to move through the states of the game
+ * 
+ * @param p unused
+ */
 void handleGameState(void *p) {
   while (true) {
     switch(currentState) {
@@ -393,7 +449,11 @@ void handleGameState(void *p) {
   }
 }
 
-// Handle setting the LED states
+/**
+ * @brief FSM to control the state of the game LEDs based on current game state
+ * 
+ * @param p unused
+ */
 void ledHandler(void *p) {
   static bool pair_led_state = LOW;
   static bool game_led_state = LOW;
@@ -473,7 +533,10 @@ void ledHandler(void *p) {
   }
 }
 
-
+/**
+ * @brief Initilizes devices, sets pin modes, starts FreeRTOS tasks
+ * 
+ */
 void setup() {
   Serial.begin(9600);
 
@@ -497,5 +560,8 @@ void setup() {
   xTaskCreatePinnedToCore(handleGameState, "Game Task", 2048, NULL, 1, NULL, 1);
 }
 
-// Empty in FreeRTOS
+/**
+ * @brief Unused in FreeRTOS
+ * 
+ */
 void loop() {}
